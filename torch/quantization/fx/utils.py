@@ -469,3 +469,15 @@ def is_get_tensor_info_node(node: Node) -> bool:
     result: bool = \
         node.op == "call_function" and node.target == getattr and node.args[1] == "shape"  # type: ignore[assignment]
     return result
+
+def get_next_node(model: GraphModule, node: Node) -> Optional[Node]:
+    """ Gets the next node in the model after the given node
+    """
+    found = False
+    for n in model.graph.nodes:
+        if n.op in ('call_module', 'call_method', 'call_function', 'output'):
+            if found:
+                return n
+        if n == node:
+            found = True
+    return None

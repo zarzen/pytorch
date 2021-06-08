@@ -30,6 +30,8 @@ from .quantization_patterns import (
 
 from .quantization_types import Pattern
 
+from ._equalize import _InputEqualizationObserver
+
 from .graph_module import (
     ObservedGraphModule,
     ObservedStandaloneGraphModule,
@@ -53,6 +55,7 @@ from .utils import (
     node_bool_tensor_arg_indexes,
     get_new_attr_name_with_prefix,
     WEIGHT_INDEX_DICT,
+    get_next_node,
 )
 
 from ..quantization_mappings import (
@@ -415,7 +418,7 @@ def maybe_insert_input_observers_for_node(
 
 def maybe_insert_output_observer_for_node(
     node: Node,
-    model: torch.nn.Module,
+    model: GraphModule,
     modules: Dict[str, torch.nn.Module],
     graph: Graph,
     matches: Dict[str, MatchResult],
@@ -458,7 +461,19 @@ def maybe_insert_output_observer_for_node(
                     get_default_output_activation_post_process_map().get(
                         matched_pattern,
                         act_post_process_ctr)
+
             observer = act_post_process_ctr()
+            if isinstance(observer, _InputEqualizationObserver):
+                # Find the next node in the graph
+                next_node = get_next_node(model, node)
+                if next_node:
+                    _, _, _, _, qconfig = matches.get(
+                        next_node.name, (None, None, None, None, None))
+                    # Use the specified output observer if the following layer is
+                    # not an equalization layer
+                    if (not qconfig) or (not isinstance(qconfig.activation(), _InputEqualizationObserver)):
+                        observer = observer.output_obs_cls()
+
             new_obs = insert_observer(node, observer, model, modules, graph)
             # set the type, so the next node can read it
             node_name_to_target_dtype[new_obs.name] = \
