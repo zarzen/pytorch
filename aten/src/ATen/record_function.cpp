@@ -34,6 +34,13 @@ RecordFunctionTLS& rf_tls() {
 #endif // defined(C10_PREFER_CUSTOM_THREAD_LOCAL_STORAGE)
 }
 
+void sync_with_generic_tls() {
+  auto generic_tls_ = c10::impl::_get_thread_local_state();
+  auto rf_tls_ = rf_tls();
+  generic_tls_->record_function_mirror_disabled = !rf_tls_.tls_record_function_enabled_;
+  generic_tls_->record_function_mirror_callback_present = !rf_tls_.sorted_tls_callbacks_.empty();
+}
+
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 std::atomic<int64_t> defaultNodeId(-1);
 
@@ -87,6 +94,7 @@ const RecordFunctionTLS& get_record_function_tls_() {
 
 void set_record_function_tls_(const RecordFunctionTLS& tls) {
   rf_tls() = tls;
+  sync_with_generic_tls();
 }
 
 enum class ToggledCallbackResult {
@@ -156,6 +164,7 @@ class CallbackManager {
     // sorted_tls_callbacks_ sorted
     auto handle = next_unique_callback_handle();
     rf_tls().sorted_tls_callbacks_.emplace_back(std::move(cb), handle);
+    sync_with_generic_tls();
     return handle;
   }
 
@@ -184,6 +193,7 @@ class CallbackManager {
     if (!found) {
       LOG(WARNING) << "Requested callback is not found";
     }
+    sync_with_generic_tls();
   }
 
   void disableCallback(CallbackHandle handle) {
@@ -224,6 +234,7 @@ class CallbackManager {
 
   void clearThreadLocalCallbacks() {
     rf_tls().sorted_tls_callbacks_.clear();
+    sync_with_generic_tls();
   }
 
   inline bool hasGlobalCallbacks() const {
@@ -353,6 +364,7 @@ class CallbackManager {
         rf.state_->tls_ctx_,
         /* is_start */ true,
         rf);
+    sync_with_generic_tls();
     rf.state_->called_start_callbacks_ = true;
   }
 
@@ -369,6 +381,7 @@ class CallbackManager {
         rf.state_->tls_ctx_,
         /* is_start */ false,
         rf);
+    sync_with_generic_tls();
   }
 
   // Global callbacks; must be sorted in increasing handle order
@@ -435,10 +448,10 @@ class CallbackManager {
 };
 
 namespace {
-  // Keeping this static manager local.
+  // Keep the global shared manager local.
+  CallbackManager _manager_singleton;
   CallbackManager& manager() {
-    static CallbackManager _manager;
-    return _manager;
+    return _manager_singleton;
   }
 } // namespace
 
@@ -499,6 +512,7 @@ bool isRecordFunctionEnabled() {
 
 void enableRecordFunction(bool enable) {
   rf_tls().tls_record_function_enabled_ = enable;
+  sync_with_generic_tls();
 }
 
 RecordFunction::RecordFunction(RecordScope scope, bool pre_sampled) {
@@ -613,9 +627,8 @@ bool checkRecordAllFunctions() {
   return (global_record_all_functions_.load(std::memory_order_relaxed) > 0);
 }
 
-bool shouldRunRecordFunction(bool* pre_sampled) {
-  auto* rf_tls_ptr = &rf_tls();
-  if (rf_tls_ptr->sorted_tls_callbacks_.empty() && !manager().hasGlobalCallbacks()) {
+bool shouldRunRecordFunction(bool* pre_sampled, c10::impl::PODLocalState* tls) {
+  if (!tls->record_function_mirror_callback_present && !manager().hasGlobalCallbacks()) {
     *pre_sampled = false;
     return false;
   }
@@ -623,7 +636,7 @@ bool shouldRunRecordFunction(bool* pre_sampled) {
     *pre_sampled = false;
     return true;
   }
-  if (!rf_tls_ptr->tls_record_function_enabled_) {
+  if (tls->record_function_mirror_disabled) {
     *pre_sampled = false;
     return false;
   }
@@ -637,6 +650,10 @@ bool shouldRunRecordFunction(bool* pre_sampled) {
     --coinflip_tls_ptr->tries_left_;
     return false;
   }
+}
+
+TORCH_API bool shouldRunRecordFunction(bool* pre_sampled) {
+  return shouldRunRecordFunction(pre_sampled, c10::impl::_get_thread_local_state());
 }
 
 } // namespace at
