@@ -43,6 +43,7 @@ def PyTorchLinuxWorkflow(
     test_runner_type: str,
     on_pull_request: bool = False,
     enable_doc_jobs: bool = False,
+    enable_update_apis_job: bool = False,
 ) -> PyTorchWorkflow:
     return {
         "build_environment": build_environment,
@@ -50,6 +51,7 @@ def PyTorchLinuxWorkflow(
         "test_runner_type": test_runner_type,
         "on_pull_request": on_pull_request,
         "enable_doc_jobs": enable_doc_jobs,
+        "enable_update_apis_job": enable_update_apis_job,
     }
 
 
@@ -82,6 +84,7 @@ LINUX_WORKFLOWS = [
         test_runner_type=LINUX_CPU_TEST_RUNNER,
         on_pull_request=True,
         enable_doc_jobs=True,
+        enable_update_apis_job=True,
     ),
     # PyTorchLinuxWorkflow(
     #     build_environment="pytorch-paralleltbb-linux-xenial-py3.6-gcc5.4",
