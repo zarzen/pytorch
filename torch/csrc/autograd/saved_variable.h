@@ -21,8 +21,8 @@ TORCH_API extern const char* ERR_BACKWARD_TWICE;
 class TORCH_API SavedVariable {
  public:
   SavedVariable() = default;
-  SavedVariable(const Variable& variable, bool is_output, bool is_inplace_view=false);
-  SavedVariable(const c10::optional<Variable>& variable, bool is_output, bool is_inplace_view=false);
+  SavedVariable(const Variable& variable, bool is_output, bool is_inplace_on_view=false);
+  SavedVariable(const c10::optional<Variable>& variable, bool is_output, bool is_inplace_on_view=false);
   SavedVariable(SavedVariable&&) = default;
   SavedVariable& operator=(SavedVariable&&) = default;
   ~SavedVariable() {
@@ -69,6 +69,6 @@ class TORCH_API SavedVariable {
   bool was_default_constructed_ = true;
   bool requires_grad_ = false;
   bool has_grad_fn_ = false;
-  bool is_inplace_view_ = false;
+  bool is_inplace_on_view_ = false;
 };
 }} // namespace torch::autograd
