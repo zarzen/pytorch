@@ -46,6 +46,15 @@ class TORCH_API SavedVariable {
   }
 
  private:
+  // This field contains either:
+  // 1. the variable to save
+  // 2. or its tensor_data.
+  // If storing the variable itself would create a circular reference,
+  // we fall into the second case and its metadata is also saved separately.
+  // In that case, the grad_fn must be passed in to the unpack function when
+  // reconstructing the Variable.
+  // The field saved_orignal_ below reflects the two cases: its value is true
+  // in the first case and false in the second case.
   at::Tensor data_;
 
   // This field is used to store the forward AD gradients associated with
@@ -70,5 +79,6 @@ class TORCH_API SavedVariable {
   bool requires_grad_ = false;
   bool has_grad_fn_ = false;
   bool is_inplace_on_view_ = false;
+  bool saved_original_ = false;
 };
 }} // namespace torch::autograd

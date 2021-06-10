@@ -12,6 +12,8 @@
 #include <memory>
 #include <sstream>
 
+#include <iostream>
+
 namespace torch { namespace autograd {
 
 SavedVariable::SavedVariable(const Variable& variable, bool is_output, bool is_inplace_on_view) {
@@ -38,12 +40,29 @@ SavedVariable::SavedVariable(const Variable& variable, bool is_output, bool is_i
 
     was_default_constructed_ = false;
     is_inplace_on_view_ = is_inplace_on_view;
-    version_counter_ = impl::version_counter(variable);
-    saved_version_ = version_counter_.current_version();
+    auto& version_counter = impl::version_counter(variable);
+    saved_version_ = version_counter.current_version();
+
+    // This check actually does not hold
+    // TORCH_CHECK(is_output && variable.is_leaf(), "Variable is both an output and a leaf");
+
+    // If the variable is a leaf or is not an output, we can safely save the
+    // original variable without running the risk of reference cycles.
+    // 1. If the variable is not an output, its grad_fn has already been fully
+    // created and in particular will be a different Node than the one
+    // we are currently constructing (the one that owns this SavedVariable).
+    // 2. If the variable is a leaf, it only has weak reference to the grad_accumulator
+    // which cannot create a cycle.
+    if (!is_output || variable.is_leaf()) {
+      saved_original_ = true;
+      data_ = variable;
+      return;
+    }
 
     output_nr_ = variable.output_nr();
     requires_grad_ = variable.requires_grad();
     has_grad_fn_ = !variable.is_leaf();
+    version_counter_ = version_counter;
 
     // These copies are all shared_ptr copies, so slightly more expensive.
     // Do them here instead of in the init list in case data is undefined.
@@ -79,13 +98,29 @@ Variable SavedVariable::unpack(std::shared_ptr<Node> saved_for) const {
 
   // We want grad_fn here to provide the most helpful debug message to the user
   // if versions don't match
-  auto grad_fn = is_inplace_on_view_ ? weak_grad_fn_.lock() : grad_fn_;
+  auto grad_fn = saved_original_ ? data_.grad_fn()
+                                : is_inplace_on_view_ ? weak_grad_fn_.lock()
+                                                      : grad_fn_;
   if (has_grad_fn_ && !grad_fn) {
     TORCH_CHECK(saved_for,"No grad_fn for non-leaf saved variable");
     grad_fn = std::move(saved_for);
   }
 
-  if (saved_version_ != version_counter_.current_version()) {
+
+  // auto version_counter = saved_original_ ? impl::version_counter(data_) : version_counter_;
+
+  // uint32_t current_version;
+  // if (saved_original_) {
+  //   std::cout << "Reading current version from saved data" << "\n";
+  //   current_version = impl::version_counter(data_).current_version();
+  // } else {
+  //   std::cout << "Reading current version from saved version counter" << "\n";
+  //   current_version = version_counter_.current_version();
+  // }
+  auto current_version = saved_original_ ? impl::version_counter(data_).current_version()
+                                         : version_counter_.current_version();
+
+  if (saved_version_ != current_version) {
     std::stringstream message;
     message << "one of the variables needed for gradient computation has been "
         "modified by an inplace operation: [" << data_.toString() << " "
@@ -107,6 +142,10 @@ Variable SavedVariable::unpack(std::shared_ptr<Node> saved_for) const {
             "was changed in there or anywhere later. Good luck!";
     }
     TORCH_CHECK(false, message.str());
+  }
+
+  if (saved_original_) {
+    return data_;
   }
 
   // NB: saved views are unpacked as normal Variables (not views) even though
