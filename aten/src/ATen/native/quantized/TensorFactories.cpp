@@ -116,6 +116,7 @@ Tensor empty_quantized(
                               .merge_memory_format(memory_format);
 
   Tensor output;
+
   if (qtensor.qscheme() == kPerTensorAffine) {
     output = at::_empty_affine_quantized(
         size, options, qtensor.q_scale(), qtensor.q_zero_point());
