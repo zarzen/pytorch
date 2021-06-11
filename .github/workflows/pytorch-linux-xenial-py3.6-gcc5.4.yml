@@ -409,6 +409,25 @@ jobs:
           name: pytorch_github_io
           if-no-files-found: error
           path: pytorch_github_io.zip
+      - name: Deploy preview to Netlify
+        env:
+          NETLIFY_OAUTH_TOKEN: ${{ secrets.NETLIFY_OAUTH_TOKEN }}
+        run: |
+          mkdir deploy-site
+          cp pytorch_github_io.zip deploy-site
+          cd deploy-site
+
+          # this is twice on purpose
+          unzip -o pytorch_github_io.zip
+          unzip -o pytorch_github_io.zip
+          
+          cd home/ec2-user/actions-runner/_work/pytorch/pytorch/pytorch.github.io/docs/master
+          zip -r website.zip *
+          
+          curl -H "Content-Type: application/zip" \
+              -H "Authorization: Bearer $NETLIFY_OAUTH_TOKEN" \
+              --data-binary "@website.zip" \
+              https://api.netlify.com/api/v1/sites
       - name: Clean up docker images
         if: always()
         run: |
