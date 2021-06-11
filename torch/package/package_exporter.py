@@ -6,7 +6,7 @@ import pickletools
 import types
 from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, IntFlag
 from pathlib import Path
 from typing import (
     Any,
@@ -49,6 +49,14 @@ class _ModuleProviderAction(Enum):
     EXTERN = 2
     MOCK = 3
     DENY = 4
+
+
+class VerbosityLevel(IntFlag):
+    """List of different levels of verbosity info to print after class:`PackageExporter` closes."""
+
+    NONE = 0
+    PACKAGE_INFO = 1
+    PACKAGE_AND_DEPENDENCY_INFO = 2
 
 
 class PackagingErrorReason(Enum):
@@ -170,7 +178,7 @@ class PackageExporter:
         self,
         f: Union[str, Path, BinaryIO],
         importer: Union[Importer, Sequence[Importer]] = sys_importer,
-        verbose: bool = True,
+        verbose: int = VerbosityLevel.NONE,
     ):
         """
         Create an exporter.
@@ -180,8 +188,11 @@ class PackageExporter:
                 or a binary I/O object.
             importer: If a single Importer is passed, use that to search for modules.
                 If a sequence of importers are passsed, an ``OrderedImporter`` will be constructed out of them.
-            verbose: Print information about dependency resolution to stdout.
-                Useful for tracking down why certain files get included.
+            verbose: Print information about dependency resolution to stdout. Higher values will increase
+                amount of information printed. ``VerbosityLevel.NONE=0`` will print out nothing,
+                ``VerbosityLevel.PACKAGE_INFO=1`` will print out the package contents sorted by category, and
+                ``VerbosityLevel.PACKAGE_AND_DEPENDENCY_INFO=3`` will print out the package contents with dependency
+                information.
         """
         if isinstance(f, (Path, str)):
             f = str(f)
@@ -275,10 +286,6 @@ class PackageExporter:
                     continue
             if self._module_exists(dep_module_name):
                 dependencies[dep_module_name] = True
-
-        if self.verbose:
-            dep_str = "".join(f"  {dep}\n" for dep in dependencies)
-            print(f"{module_name} depends on:\n{dep_str}\n")
 
         return list(dependencies.keys())
 
@@ -382,13 +389,11 @@ node [shape=box];
             return
 
         if self._can_implicitly_extern(module_name):
-            if self.verbose:
-                print(
-                    f"implicitly adding {module_name} to external modules "
-                    f"since it is part of the standard library and is a dependency."
-                )
             self.dependency_graph.add_node(
-                module_name, action=_ModuleProviderAction.EXTERN, provided=True
+                module_name,
+                action=_ModuleProviderAction.EXTERN,
+                provided=True,
+                implicitly_externed=True,
             )
             return
 
@@ -518,10 +523,6 @@ node [shape=box];
                     module, field = arg.split(" ")
                     if module not in all_dependencies:
                         all_dependencies.append(module)
-
-            if self.verbose:
-                dep_string = "".join(f"  {dep}\n" for dep in all_dependencies)
-                print(f"{resource} depends on:\n{dep_string}\n")
 
             for module_name in all_dependencies:
                 self.dependency_graph.add_edge(name_in_dependency_graph, module_name)
@@ -852,15 +853,89 @@ node [shape=box];
         extern_file_contents = "\n".join(extern_modules) + "\n"
         self._write(".data/extern_modules", extern_file_contents)
 
+    def _print_debug_info(self):
+        """Print out the debugging information based on the verbosity level."""
+
+        def print_pretty(
+            category: str,
+            entries: List[str],
+            indentation=0,
+            recurse=True,
+            bullet_char="-",
+        ):
+            tab = "    "
+            tabs = tab * indentation
+            print(f"{tabs}{bullet_char} {category}:")
+            tabs += tab
+            for item in sorted(entries):
+                print(f"{tabs}{item}")
+                if recurse and self.verbose > VerbosityLevel.PACKAGE_INFO:
+                    successors = self.dependency_graph._succ[item].keys()
+                    if successors:
+                        print_pretty(
+                            "relies on",
+                            successors,
+                            indentation=2,
+                            recurse=False,
+                            bullet_char="*",
+                        )
+                    predecessors = self.dependency_graph._pred[item].keys()
+                    if predecessors:
+                        print_pretty(
+                            "included in",
+                            predecessors,
+                            indentation=2,
+                            recurse=False,
+                            bullet_char="*",
+                        )
+
+        interned_mods = []
+        explicitly_externed_mods = []
+        implicitly_externed_mods = []
+        mocked_mods = []
+        pickled_objs = []
+        invalid_nodes = []
+        denied_nodes = []
+
+        for module_name, attrs in self.dependency_graph.nodes.items():
+            action = attrs.get("action")
+
+            if action == _ModuleProviderAction.EXTERN:
+                if attrs.get("implicityly_externed"):
+                    implicitly_externed_mods.append(module_name)
+                else:
+                    explicitly_externed_mods.append(module_name)
+            elif action == _ModuleProviderAction.MOCK:
+                mocked_mods.append(module_name)
+            elif action == _ModuleProviderAction.INTERN:
+                if attrs.get("is_pickle"):
+                    pickled_objs.append(module_name)
+                else:
+                    interned_mods.append(module_name)
+            elif action == _ModuleProviderAction.DENY:
+                denied_nodes.append(module_name)
+            else:
+                invalid_nodes.append(module_name)
+
+        print("Package Contents:")
+        print_pretty("interned modules", interned_mods)
+        print_pretty("explicitly externed modules", explicitly_externed_mods)
+        print_pretty("implicitly externed modules", implicitly_externed_mods)
+        print_pretty("mocked modules", mocked_mods)
+        print_pretty("pickles", pickled_objs)
+        print_pretty("denied modules which are depended upon", denied_nodes)
+        print_pretty("invalid objects", invalid_nodes)
+        if self.verbose > VerbosityLevel.PACKAGE_INFO:
+            print(f"Dependency graph for exported package: \n{self._write_dep_graph()}")
+
     def close(self):
         """Write the package to the filesystem. Any calls after :meth:`close` are now invalid.
         It is preferable to use resource guard syntax instead::
-
             with PackageExporter("file.zip") as e:
                 ...
         """
         if self.verbose:
-            print(f"Dependency graph for exported package: \n{self._write_dep_graph()}")
+            self._print_debug_info()
 
         self._execute_dependency_graph()
 
