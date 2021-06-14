@@ -68,7 +68,7 @@ TORCH_API Value* emitBuiltinCall(
 /*                  Program Status                 */
 /* =============================================== */
 
-enum NoneStatus { ALWAYS, MAYBE, NEVER };
+enum class NoneStatus { ALWAYS, MAYBE, NEVER };
 
 NoneStatus canBeNone(Value* v);
 
