@@ -1221,6 +1221,14 @@ def _get_overloads(obj):
     if uncompiled_overloads is None:
         return existing_compiled_fns
 
+    if obj in uncompiled_overloads:
+        sourcelines, file_lineno, filename = _jit_internal.get_source_lines_and_file(obj)
+        raise RuntimeError(
+            f'Implementation for the function "{qual_name}" is missing. Please make sure a ' +
+            "definition is provided and defined after all overload declarations.\n" +
+            f'File "{filename}", line {file_lineno}:' + "\n" + ''.join(sourcelines)
+        )
+
     compiled_fns = []
     for overload_fn in uncompiled_overloads:
         compiled_fns.append(
