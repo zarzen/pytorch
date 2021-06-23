@@ -203,6 +203,8 @@ bool attributesEqualCSE(const Node* lhs, const Node* rhs) {
 
 } // anonymous namespace
 
+// Makes a hash that hashes the input Value, the output type
+// as well as the node attributes
 size_t HashNode::operator()(const Node* k) const {
   AT_ASSERT(k != nullptr);
   size_t constant_hash = 0;
@@ -230,6 +232,8 @@ size_t HashNode::operator()(const Node* k) const {
       constant_hash);
 };
 
+// Checks that two nodes have the same inputs, output types
+// and node attributes.
 bool EqualNode::operator()(const Node* lhs, const Node* rhs) const {
   if (lhs == nullptr && rhs == nullptr)
     return true;
