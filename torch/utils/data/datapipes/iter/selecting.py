@@ -28,43 +28,42 @@ class FilterIterDataPipe(MapIterDataPipe):
                  filter_fn: Callable[..., bool],
                  fn_args: Optional[Tuple] = None,
                  fn_kwargs: Optional[Dict] = None,
+                 batch_level: bool = False,
                  drop_empty_batches: bool = True,
-                 nesting_level: int = 0,
+                 nesting_level:int = 0,
                  ) -> None:
         self.drop_empty_batches = drop_empty_batches
-        super().__init__(datapipe, fn=filter_fn, fn_args=fn_args, fn_kwargs=fn_kwargs, nesting_level=nesting_level)
+        super().__init__(datapipe, fn=filter_fn, fn_args=fn_args, fn_kwargs=fn_kwargs, nesting_level = nesting_level)
+
+    def _merge(self, data, mask):
+        result = []
+        for i,b in zip(data, mask):
+            if isinstance(b, list):
+                t = self._merge(i, b)
+                if len(t) > 0 or not self.drop_empty_batches:
+                    result.append(t)
+            else:
+                if b:
+                    result.append(i)
+        return result
 
     def __iter__(self) -> Iterator[T_co]:
         res: bool
         for data in self.datapipe:
-            filtered = self._applyFilter(data, self.nesting_level)
-            if self._isNonEmpty(filtered):
-                yield filtered
-
-    def _applyFilter(self, data, nesting_level):
-        if nesting_level == 0:
-            return self._returnIfTrue(data)
-        elif nesting_level > 0:
-            if not isinstance(data, list):
-                raise IndexError(f"nesting_level {self.nesting_level} out of range (exceeds data pipe depth)")
-            result = filter(self._isNonEmpty, [self._applyFilter(i, nesting_level - 1) for i in data])
-            return list(result)
-        else:  # Handling nesting_level == -1
-            if isinstance(data, list):
-                result = filter(self._isNonEmpty, [self._applyFilter(i, nesting_level) for i in data])
-                return list(result)
+            if self.nesting_level == 0 or not isinstance(data, list):
+                res = self.fn(data, *self.args, **self.kwargs)
+                if not isinstance(res, bool):
+                    raise ValueError("Boolean output is required for "
+                                    "`filter_fn` of FilterIterDataPipe")
+                if res:
+                    yield data
             else:
-                return self._returnIfTrue(data)
-
-    def _returnIfTrue(self, data):
-        condition = self.fn(data, *self.args, **self.kwargs)
-        if not isinstance(condition, bool):
-            raise ValueError("Boolean output is required for `filter_fn` of FilterIterDataPipe")
-        if condition:
-            return data
-
-    def _isNonEmpty(self, data):
-        return data is not None and not (data == [] and self.drop_empty_batches)
+                mask = self._apply(data, self.nesting_level, self.fn, self.args, self.kwargs)
+                merged = self._merge(data, mask)
+                if len(merged) > 0 or not self.drop_empty_batches:
+                    yield merged
+                
+            
 
     def __len__(self):
         raise TypeError("{} instance doesn't have valid length".format(type(self).__name__))
