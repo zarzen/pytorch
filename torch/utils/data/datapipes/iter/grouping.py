@@ -2,14 +2,14 @@ import functools
 import os
 import warnings
 
-from torch.utils.data import IterDataPipe, functional_datapipe
+from torch.utils.data import IterDataPipe, functional_datapipe, DFIterDataPipe, DataChunk
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sized, Tuple, TypeVar
 
 T_co = TypeVar('T_co', covariant=True)
 
 def dive(element, nesting_level):
     if nesting_level == -1:
-        if isinstance(element, list):
+        if isinstance(element, DataChunk):
             for item in element:
                 for i in dive(item, nesting_level = -1):
                     yield i
@@ -26,10 +26,24 @@ def dive(element, nesting_level):
 class UnBatchIterDataPipe(IterDataPipe):
     def __init__(self, datapipe, unbatch_level: int = 1):
         self.datapipe = datapipe
+        # print('unbatch of', type(datapipe))
+        depth = getattr(datapipe,'_dp_nesting_depth',0)
+        if unbatch_level < 0:
+            unbatch_level = depth + 1 + unbatch_level
+            print('new unbatch level', unbatch_level)
+        # p
         self.unbatch_level = unbatch_level
+        
+        # print('depth is', depth)
+        self._dp_nesting_depth = depth - unbatch_level
+        if self._dp_nesting_depth == 0 and getattr(datapipe,'_dp_contains_dataframe',False) == True:
+            # print('_dp_cast_to_df')
+            self._dp_cast_to_df = True
 
     def __iter__(self):
+        # print('unbatch iter')
         for element in self.datapipe:
+            # print(element, type(element), isinstance(element, list))
             for i in dive(element, nesting_level=self.unbatch_level):
                 yield i
 
@@ -56,6 +70,7 @@ class BatchIterDataPipe(IterDataPipe[List[T_co]]):
                  batch_size: int,
                  drop_last: bool = False,
                  unbatch_level: int = 0,
+                 wrapper_class = DataChunk,
                  ) -> None:
         assert batch_size > 0, "Batch size is required to be larger than 0!"
         super().__init__()
@@ -67,17 +82,23 @@ class BatchIterDataPipe(IterDataPipe[List[T_co]]):
         self.batch_size = batch_size
         self.drop_last = drop_last
         self.length = None
+        source_depth = getattr(datapipe,'_dp_nesting_depth',0)
+        if source_depth is None:
+            source_depth = 0
+        self._dp_nesting_depth = source_depth + 1
+        self.wrapper_class = wrapper_class
+        # print('self._dp_nesting_depth', self._dp_nesting_depth)
 
     def __iter__(self) -> Iterator[List[T_co]]:
         batch: List[T_co] = []
         for x in self.datapipe:
             batch.append(x)
             if len(batch) == self.batch_size:
-                yield batch
+                yield self.wrapper_class(batch)
                 batch = []
         if len(batch) > 0:
             if not self.drop_last:
-                yield batch
+                yield self.wrapper_class(batch)
             batch = []
 
     def __len__(self) -> int:
@@ -273,8 +294,9 @@ class GroupByIterDataPipe(IterDataPipe):
                 buffer_size -= len(buffer[biggest_key])
                 del buffer[biggest_key]
                 
-           
+            # print(key[0])
             if key not in buffer:
+                
                 buffer[key] = [x]
             else:
                 buffer[key].append(x)

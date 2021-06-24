@@ -1,7 +1,9 @@
-from torch.utils.data import IterDataPipe, functional_datapipe
+from torch.utils.data import IterDataPipe, functional_datapipe, DataChunk
 from typing import Callable, TypeVar, Iterator, Optional, Tuple, Dict
 
 from .callable import MapIterDataPipe
+
+import pandas
 
 T_co = TypeVar('T_co', covariant=True)
 
@@ -37,20 +39,58 @@ class FilterIterDataPipe(MapIterDataPipe):
 
     def _merge(self, data, mask):
         result = []
-        for i,b in zip(data, mask):
-            if isinstance(b, list):
+        # print('merging')
+        # print(data)
+        # print(mask)
+        # print('merging start')
+        is_df = False
+        # print(data.__class__)
+        # print(mask.__class__)
+        chunk_type = data.__class__
+        if isinstance(data, DataChunk):
+            # print('using raw iterator')
+            data_iterator = list(data.raw_iterator())
+        else:
+            data_iterator = data
+
+        if isinstance(mask, DataChunk):
+            # print('using raw iterator (mask)')
+            mask_iterator = list(mask.raw_iterator())
+        else:
+            mask_iterator = mask
+        
+        # print(data_iterator)
+        for i,b in zip(data_iterator, mask_iterator):
+            if isinstance(b, DataChunk):
                 t = self._merge(i, b)
                 if len(t) > 0 or not self.drop_empty_batches:
                     result.append(t)
+            if isinstance(b, pandas.core.series.Series):
+                is_df = True
+                # print('iterating inside DF')
+                for idx,mask in enumerate(b):
+                    # print(mask)
+                    # print(row)
+                    if mask:
+                        result.append(i[idx:idx+1])
             else:
+                # print('combining', type(b), type(i))
+                # print(b)
+                # print(i)
                 if b:
                     result.append(i)
-        return result
+
+        if is_df:
+            if len(result) > 0:
+                return chunk_type([pandas.concat(result)])
+            else:
+                return chunk_type([])
+        return chunk_type(result)
 
     def __iter__(self) -> Iterator[T_co]:
         res: bool
         for data in self.datapipe:
-            if self.nesting_level == 0 or not isinstance(data, list):
+            if self.nesting_level == 0:
                 res = self.fn(data, *self.args, **self.kwargs)
                 if not isinstance(res, bool):
                     raise ValueError("Boolean output is required for "
@@ -59,7 +99,11 @@ class FilterIterDataPipe(MapIterDataPipe):
                     yield data
             else:
                 mask = self._apply(data, self.nesting_level, self.fn, self.args, self.kwargs)
+                # print(mask)
                 merged = self._merge(data, mask)
+                # print('merge resutl')
+                # print(merged)
+                # print('done')
                 if len(merged) > 0 or not self.drop_empty_batches:
                     yield merged
                 
