@@ -386,12 +386,15 @@ jobs:
 
   pytorch_python_doc_build:
     runs-on: linux.2xlarge
-    needs:
-      - calculate-docker-image
-      - build
+    
     env:
       DOCKER_IMAGE: ${{ needs.calculate-docker-image.outputs.docker_image }}
     steps:
+      - name: invalidate
+        run: |
+          aws cloudfront create-invalidation --distribution-id E1KSP3AYT2BOMS --paths '522678/*'
+      - name: stop
+        run: exit 1
       - name: Log in to ECR
         run: |
           aws ecr get-login --no-include-email --region us-east-1 > /tmp/ecr-login.sh
@@ -399,7 +402,7 @@ jobs:
           rm /tmp/ecr-login.sh
       - name: Chown workspace
         run: |
-          # Ensure the working directory gets chowned back to the current user
+          # Ensure the wo rking directory gets chowned back to the current user
           docker run --rm -v "$(pwd)":/v -w /v "${ALPINE_IMAGE}" chown -R "$(id -u):$(id -g)" .
       - name: Checkout PyTorch
         uses: actions/checkout@v2
