@@ -781,21 +781,21 @@ bool NoneType::isSubtypeOfExt(const TypePtr& rhs, std::ostream *why_not) const {
 // an Optional. This populates `types` with all the types found during
 // flattening. At the end of `flattenUnion`, `types` may have
 // duplicates, but it will not have nested Optionals/Unions
-void flattenUnion(TypePtr& type, std::vector<TypePtr>& types) {
+void flattenUnion(TypePtr& type, std::vector<TypePtr>* to_fill) {
   if (auto union_type = type->cast<UnionType>()) {
     for (auto inner : union_type->containedTypes()) {
-      flattenUnion(inner, types);
+      flattenUnion(inner, to_fill);
     }
   } else if (auto opt_type = type->cast<OptionalType>()) {
     auto inner = opt_type->getElementType();
-    flattenUnion(inner, types);
-    types.emplace_back(NoneType::get());
+    flattenUnion(inner, to_fill);
+    to_fill->emplace_back(NoneType::get());
   } else if (type->kind() == NumberType::Kind) {
-    types.emplace_back(IntType::get());
-    types.emplace_back(FloatType::get());
-    types.emplace_back(ComplexType::get());
+    to_fill->emplace_back(IntType::get());
+    to_fill->emplace_back(FloatType::get());
+    to_fill->emplace_back(ComplexType::get());
   } else {
-    types.emplace_back(type);
+    to_fill->emplace_back(type);
   }
 }
 
@@ -808,7 +808,10 @@ void flattenUnion(TypePtr& type, std::vector<TypePtr>& types) {
 // this isn't an issue--most types SHOULD be unified even if the parent
 // type wasn't in the original vector. However, later additions to the
 // type system might necessitate reworking `get_supertype`
-void filterDuplicateSubtypes(std::vector<TypePtr>& types) {
+void filterDuplicateSubtypes(std::vector<TypePtr>* types) {
+  if (types->empty()) {
+    return;
+  }
   auto get_supertype = [](const TypePtr t1, const TypePtr t2) -> c10::optional<TypePtr> {
     // We don't want nested Optionals. Also, prematurely unifying to
     // `Optional` could prevent us from coalescing other types
@@ -827,14 +830,14 @@ void filterDuplicateSubtypes(std::vector<TypePtr>& types) {
   // decrement `end`, swap `types[j]` with the unified type, and
   // break. Otherwise, we keep `end` where it is to signify that the
   // new end of the vector hasn't shifted
-  size_t end_idx = types.size()-1;
-  for (size_t i = types.size()-1; i > 0; --i) {
+  size_t end_idx = types->size()-1;
+  for (size_t i = types->size()-1; i > 0; --i) {
     for (size_t j = std::min(i-1, end_idx); ; --j) {
       c10::optional<TypePtr> unified;
-      unified = get_supertype(types[i], types[j]);
+      unified = get_supertype((*types)[i], (*types)[j]);
       if (unified) {
-        types[j] = *unified;
-        types[i] = types[end_idx];
+        (*types)[j] = *unified;
+        (*types)[i] = (*types)[end_idx];
         --end_idx;
         break;
       }
@@ -846,15 +849,15 @@ void filterDuplicateSubtypes(std::vector<TypePtr>& types) {
     }
   }
   // Cut off the vector's tail so that `end` is the real last element
-  types.erase(types.begin() + end_idx + 1, types.end());
+  types->erase(types->begin() + end_idx + 1, types->end());
 }
 
-void standardizeUnion(std::vector<TypePtr>& types) {
+void sortUnion(std::vector<TypePtr>* types) {
   // We want the elements to be sorted so we can easily compare two
   // UnionType objects for equality in the future. Note that this order
   // is guaranteed to be stable since we've already coalesced any
   // possible types
-  std::sort(types.begin(), types.end(),
+  std::sort(types->begin(), types->end(),
           [](const TypePtr a, const TypePtr b) -> bool {
             if (a->kind() != b->kind()) {
               return a->kind() < b->kind();
@@ -863,17 +866,27 @@ void standardizeUnion(std::vector<TypePtr>& types) {
           });
 }
 
+void standardizeVectorForUnion(std::vector<TypePtr>& reference, std::vector<TypePtr>* to_fill) {
+  for (auto type : reference) {
+    flattenUnion(type, to_fill);
+  }
+  filterDuplicateSubtypes(to_fill);
+  sortUnion(to_fill);
+}
+
+void standardizeVectorForUnion(std::vector<TypePtr>* to_flatten) {
+  TORCH_INTERNAL_ASSERT(to_flatten, "`standardizeVectorForUnion was ",
+                        "passed a `nullptr`");
+  std::vector<TypePtr> to_fill;
+  standardizeVectorForUnion(*to_flatten, &to_fill);
+  *to_flatten = to_fill;
+}
+
 UnionType::UnionType(std::vector<TypePtr> types, TypeKind kind) : Type(kind) {
   TORCH_INTERNAL_ASSERT(types.size() >= 2, "Cannot create a Union of "
                         "one or fewer types");
 
-  for (auto type : types) {
-    flattenUnion(type, types_);
-  }
-
-  filterDuplicateSubtypes(types_);
-
-  standardizeUnion(types_);
+  standardizeVectorForUnion(types, &types_);
 
   // Gate the assert in a regular conditional so that we don't create
   // this long error message unnecessarily
@@ -918,6 +931,7 @@ UnionTypePtr UnionType::create(std::vector<TypePtr> types) {
   auto union_type = new UnionType(std::move(types));
   return UnionTypePtr(std::move(union_type));
 }
+
 
 bool UnionType::operator==(const Type& rhs) const {
   if (auto union_rhs = rhs.cast<UnionType>()) {
@@ -1049,11 +1063,7 @@ c10::optional<TypePtr> UnionType::toOptional() const {
   if (!canHoldType(NoneType::get())) {
       return c10::nullopt;
   }
-  std::vector<TypePtr> optional_types;
-  for (auto type : types_) {
-    flattenUnion(type, optional_types);
-  }
-  filterDuplicateSubtypes(optional_types);
+  std::vector<TypePtr> optional_types = this->containedTypes().vec();
 
   auto get_type_iterator = [&](TypePtr lhs) -> c10::optional<decltype (optional_types.begin())> {
     for (auto rhs = optional_types.begin(); rhs < optional_types.end(); ++rhs) {

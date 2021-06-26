@@ -29,6 +29,8 @@ struct FunctionSchema;
 struct NamedType;
 using OptNameList = c10::optional<std::vector<std::string>>;
 
+void standardizeVectorForUnion(std::vector<TypePtr>* to_flatten);
+
 struct AnyType;
 using AnyTypePtr = std::shared_ptr<AnyType>;
 // Any is the top of the type hierarchy, all other types are subtypes
