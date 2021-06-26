@@ -9,8 +9,8 @@ namespace torch {
 namespace jit {
 
 static inline TypePtr unwrapOptional(TypePtr opt_type) {
-  if (auto unwrap_list_type = opt_type->cast<OptionalType>()) {
-    return unwrap_list_type->getElementType();
+  if (opt_type->isOptional()) {
+    return opt_type->expect<UnionType>()->getContainedElementIfOptional();
   }
   return opt_type;
 }
@@ -58,13 +58,19 @@ Value* tryConvertToType(
     Value* value,
     bool allow_conversions) {
   // treat conversion to Optional[T] as conversions to T
-  if (OptionalTypePtr op = concrete_type->cast<OptionalType>()) {
-    if (value->type()->kind() != OptionalType::Kind &&
-        !value->type()->isSubtypeOf(NoneType::get())) {
-      return tryConvertToType(
-          loc, graph, op->getElementType(), value, allow_conversions);
-    }
+  if (concrete_type->isOptional() && !value->type()->isOptional() && !value->type()->isSubtypeOf(NoneType::get())) {
+    auto contained = concrete_type->expect<UnionType>()->getContainedElementIfOptional();
+    return tryConvertToType(loc, graph, contained, value, allow_conversions);
   }
+
+  //// Transform `Union[T, None]` to `Optional[T]` for schema matching
+  //// purposes only
+  //if (UnionTypePtr union_type = concrete_type->cast<UnionType>()) {
+  //  auto maybeOpt = union_type->toOptional();
+  //  if (maybeOpt) {
+  //    return tryConvertToType(loc, graph, *maybeOpt, value, allow_conversions);
+  //  }
+  //}
 
   if (auto value_tuple = value->type()->cast<TupleType>()) {
     // Allow homogeneous tuples to be casted implicitly to lists of appropriate

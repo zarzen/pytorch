@@ -3657,10 +3657,6 @@ def foo(x):
                 return a + 2
             torch.jit.script(invalid4)
 
-    def test_is_optional(self):
-        ann = Union[List[int], List[float]]
-        torch._jit_internal.is_optional(ann)
-
     def test_interpreter_fuzz(self):
         import builtins
         # This test generates random tree-like programs to fuzz test
@@ -9781,7 +9777,7 @@ dedent """
                     c0 = 1.0
                 return c0
 
-        with self.assertRaisesRegex(RuntimeError, "Variable 'c0' previously has type float"):
+        with self.assertRaisesRegex(RuntimeError, "Variable 'c0' previously had type float"):
             @torch.jit.script
             def diff_existing_type(x):
                 c0 = 1.0

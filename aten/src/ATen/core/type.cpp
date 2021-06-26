@@ -10,6 +10,14 @@
 
 namespace c10 {
 
+bool Type::isOptional() const {
+  auto maybe_union = this->cast<UnionType>();
+  if (maybe_union) {
+    return (*maybe_union).types_.size() == 2 && (*maybe_union).canHoldNone();
+  }
+  return false;
+}
+
 TypeVerbosity type_verbosity() {
   static const char* c_verbosity = std::getenv("PYTORCH_JIT_TYPE_VERBOSITY");
   static TypeVerbosity verbosity = c_verbosity ?
@@ -95,8 +103,8 @@ std::ostream& operator<<(std::ostream & out, const Type & t) {
   } else if(t.kind() == TypeKind::ListType) {
     auto prim = t.castRaw<ListType>()->getElementType();
     out << *prim << "[]";
-  } else if (t.kind() == TypeKind::OptionalType) {
-    auto prim = t.castRaw<OptionalType>()->getElementType();
+  } else if (t.isOptional()) {
+    auto prim = t.castRaw<UnionType>()->getContainedElementIfOptional();
     out << *prim << "?";
   } else if(t.kind() == TypeKind::FutureType) {
     auto elem = t.castRaw<FutureType>()->getElementType();
@@ -197,10 +205,6 @@ LayoutTypePtr LayoutType::get() {
 static LayoutTypePtr value(new LayoutType());
 return value;
 }
-OptionalTypePtr OptionalType::ofTensor() {
-  static auto value = OptionalType::create(TensorType::get());
-  return value;
-}
 PyObjectTypePtr PyObjectType::get() {
   static PyObjectTypePtr value(new PyObjectType());
   return value;
@@ -268,9 +272,9 @@ c10::optional<TypePtr> unifyTypesImpl(const TypePtr& t1, const TypePtr& t2) {
   }
 
   if (t1->isSubtypeOf(NoneType::get()) && !t2->isSubtypeOf(NoneType::get())) {
-    return OptionalType::create(t2);
+    return UnionType::createOptionalOf(t2);
   } else if (t2->isSubtypeOf(NoneType::get()) && !t1->isSubtypeOf(NoneType::get())) {
-    return OptionalType::create(t1);
+    return UnionType::createOptionalOf(t1);
   }
 
   // NB: we do not return NumberType because there is not currently enough
@@ -279,13 +283,13 @@ c10::optional<TypePtr> unifyTypesImpl(const TypePtr& t1, const TypePtr& t2) {
   // Attempt to unify Complete Tensor Types for immutable type containers
 
   // unify(Optional[t1], t2) => Optional[unify(t1, t2)]
-  if (auto opt_t1 = t1->cast<OptionalType>()) {
-    if (auto elem = unifyTypes(opt_t1->getElementType(), t2)) {
-      return OptionalType::create(*elem);
+  if (t1->isOptional()) {
+    if (auto elem = unifyTypes(t1->expect<UnionType>()->getContainedElementIfOptional(), t2)) {
+      return UnionType::createOptionalOf(*elem);
     }
-  } else if (auto opt_t2 = t2->cast<OptionalType>()) {
-    if (auto elem = unifyTypes(opt_t2->getElementType(), t1)) {
-      return OptionalType::create(*elem);
+  } else if (t2->isOptional()) {
+    if (auto elem = unifyTypes(t2->expect<UnionType>()->getContainedElementIfOptional(), t1)) {
+      return UnionType::createOptionalOf(*elem);
     }
   }
 
@@ -458,10 +462,12 @@ MatchTypeReturn matchTypeVariables(
       ss << "Cannot match a rref to " << actual->repr_str();
       return ss.str();
     }
-  } else if (auto opt_formal = formal->cast<OptionalType>()) {
-    if (auto opt_actual = actual->cast<OptionalType>()) {
+  } else if (formal->isOptional()) {
+    auto formal_contained_type = formal->expect<UnionType>()->getContainedElementIfOptional();
+    if (actual->isOptional()) {
+      auto actual_contained_type = actual->expect<UnionType>()->getContainedElementIfOptional();
       const auto optionedMatch = matchTypeVariables(
-          opt_formal->getElementType(), opt_actual->getElementType(), type_env);
+          formal_contained_type, actual_contained_type, type_env);
       if (!optionedMatch.success()) {
         // NOLINTNEXTLINE(performance-no-automatic-move)
         return optionedMatch;
@@ -471,7 +477,7 @@ MatchTypeReturn matchTypeVariables(
       // its element type matches the actual.
       // Don't match None because it is already an optional (but one of
       // unknown type).
-      return matchTypeVariables(opt_formal->getElementType(), actual, type_env);
+      return matchTypeVariables(formal_contained_type, actual, type_env);
     }
     // note: if actual was None here we potentially did not fill in the type
     // variables contained in the formal. It is still a valid match because None
@@ -529,7 +535,6 @@ TORCH_API TypePtr tryEvalTypeVariables(TypePtr type, std::unordered_map<std::str
 
 TORCH_API bool elementTypeCanBeInferredFromMembers(const TypePtr& elem_type) {
   if (elem_type->kind() == UnionType::Kind
-      || elem_type->kind() == OptionalType::Kind
       || elem_type->kind() == NumberType::Kind) {
     // Builtin Union types
     return false;
@@ -559,10 +564,7 @@ bool Type::isSubtypeOfExt(const TypePtr& rhs, std::ostream* why_not) const {
   if (rhs->kind() == TypeKind::AnyType || *this == *rhs) {
     return true;
   }
-  if (auto opt_rhs = rhs->cast<OptionalType>()) {
-    return this->isSubtypeOfExt(opt_rhs->getElementType(), why_not);
-  }
-  if (auto union_rhs = rhs->cast<UnionType>()) {
+  if (auto rhs_ = rhs->cast<UnionType>()) {
     // Check if `this` is a subtype of any of the types within the Union
     return std::any_of(union_rhs->containedTypes().begin(),
                        union_rhs->containedTypes().end(),
@@ -771,8 +773,8 @@ TupleTypePtr TupleType::createNamed(
 }
 
 bool NoneType::isSubtypeOfExt(const TypePtr& rhs, std::ostream *why_not) const {
-  if (rhs->kind() == OptionalType::Kind) {
-    return true;
+  if (auto rhs_ = rhs->cast<UnionType>()) {
+    return rhs_->canHoldNone();
   }
   return Type::isSubtypeOfExt(rhs, why_not);
 }
@@ -786,10 +788,6 @@ void flattenUnion(TypePtr& type, std::vector<TypePtr>* to_fill) {
     for (auto inner : union_type->containedTypes()) {
       flattenUnion(inner, to_fill);
     }
-  } else if (auto opt_type = type->cast<OptionalType>()) {
-    auto inner = opt_type->getElementType();
-    flattenUnion(inner, to_fill);
-    to_fill->emplace_back(NoneType::get());
   } else if (type->kind() == NumberType::Kind) {
     to_fill->emplace_back(IntType::get());
     to_fill->emplace_back(FloatType::get());
@@ -883,6 +881,7 @@ void standardizeVectorForUnion(std::vector<TypePtr>* to_flatten) {
 }
 
 UnionType::UnionType(std::vector<TypePtr> types, TypeKind kind) : Type(kind) {
+UnionType::UnionType(std::vector<TypePtr> types) : Type(UnionType::Kind) {
   TORCH_INTERNAL_ASSERT(types.size() >= 2, "Cannot create a Union of "
                         "one or fewer types");
 
@@ -922,16 +921,31 @@ UnionType::UnionType(std::vector<TypePtr> types, TypeKind kind) : Type(kind) {
 }
 
 UnionTypePtr UnionType::create(std::vector<TypePtr> types) {
-  std::stringstream nowhere;
-  if (auto unified = unifyTypeList(types, nowhere, /*default_to_union=*/false)) {
-    if ((*unified)->kind() == OptionalType::Kind) {
-      return (*unified)->expect<OptionalType>();
-    }
-  }
   auto union_type = new UnionType(std::move(types));
   return UnionTypePtr(std::move(union_type));
 }
 
+TypePtr UnionType::createOptionalOf(TypePtr type) {
+  return UnionType::create({type, NoneType::get()});
+}
+
+Pybind11_OptionalTypePtr Pybind11_OptionalType::create(std::vector<TypePtr> types) {
+  auto opt_type = new Pybind11_OptionalType(std::move(types));
+  return Pybind11_OptionalTypePtr(std::move(opt_type));
+}
+
+UnionTypePtr Pybind11_OptionalType::legacy_OptionalOfTensor() {
+  static auto value = UnionType::createOptionalOf(TensorType::get())->expect<UnionType>();
+  return value;
+}
+
+TypePtr UnionType::getContainedElementIfOptional() const {
+  TORCH_INTERNAL_ASSERT(this->isOptional(), "Cannot use "
+                        "UnionType::getContainedElementIfOptional "
+                        "unless the current Union has two types and "
+                        "one of those types is `None`");
+  return types_[0] != NoneType::get() ? types_[0] : types_[1];
+}
 
 bool UnionType::operator==(const Type& rhs) const {
   if (auto union_rhs = rhs.cast<UnionType>()) {
@@ -957,6 +971,8 @@ bool UnionType::operator==(const Type& rhs) const {
              && this->can_hold_none_
              && this->canHoldType(NumberType::get());
     }
+  }
+  else if (auto optional_rhs = rhs.cast<OptionalType>()) {
     auto optional_lhs = this->toOptional();
     return optional_lhs && *optional_rhs == *((optional_lhs.value())->expect<OptionalType>());
   } else if (rhs.kind() == NumberType::Kind) {
@@ -1034,7 +1050,7 @@ std::string UnionType::unionStr(TypePrinter printer, bool is_annotation_str) con
       ss << NumberType::get()->str();
     }
   }
-  ss << "]";
+
   return ss.str();
 }
 
@@ -1095,9 +1111,15 @@ c10::optional<TypePtr> UnionType::toOptional() const {
                       optional_types[0] : optional_types[1];
 
   return OptionalType::create(std::move(contained));
+std::string UnionType::str() const {
+  return unionStr({}, /*is_annotation_str=*/false);
 }
 
-c10::optional<TypePtr> UnionType::subtractTypeSet(std::vector<TypePtr>& to_subtract) const {
+std::string UnionType::annotation_str_impl(TypePrinter printer) const {
+  return unionStr({printer}, /*is_annotation_str=*/true);
+}
+
+TypePtr UnionType::subtractTypeSet(std::vector<TypePtr>& to_subtract) const {
   std::vector<TypePtr> types;
 
   // Given a TypePtr `lhs`, this function says whether or not `lhs` (or
@@ -1121,10 +1143,7 @@ c10::optional<TypePtr> UnionType::subtractTypeSet(std::vector<TypePtr>& to_subtr
     return c10::nullopt;
   } else if (types.size() == 1) {
     return types[0];
-  } else {
-    return UnionType::create(std::move(types));
   }
-}
 
 OptionalType::OptionalType(TypePtr contained)
                            : UnionType({contained, NoneType::get()}, TypeKind::OptionalType) {
@@ -2117,9 +2136,6 @@ size_t ClassType::addAttribute(
     TORCH_INTERNAL_ASSERT(is_module(), "adding a parameter or buffer to a non module");
     TORCH_CHECK(
         (type->kind() == TensorType::Kind) ||
-            (type->kind() == OptionalType::Kind &&
-            type->expect<OptionalType>()->getElementType()->kind() ==
-                TensorType::Kind) ||
             (type->kind() == UnionType::Kind &&
             TensorType::get()->isSubtypeOf(type->expect<UnionType>())) ||
             (type->kind() == NoneType::Kind),

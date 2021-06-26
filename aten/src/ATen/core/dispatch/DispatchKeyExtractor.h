@@ -161,7 +161,7 @@ private:
           schema.arguments()[index].type()->isSubtypeOf(
               ListType::ofTensors()) ||
           schema.arguments()[index].type()->isSubtypeOf(
-              OptionalType::ofTensor())) {
+              UnionType::createOptionalOf(TensorType::get()))) {
         dispatch_arg_indices_reverse.set(schema.arguments().size() - 1 - index);
       }
     }

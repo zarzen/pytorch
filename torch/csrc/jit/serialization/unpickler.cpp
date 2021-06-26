@@ -101,11 +101,13 @@ void restoreAccurateTypeTags(const IValue& root, const TypePtr& type_tag) {
           to_process.emplace_back(std::move(elem));
         }
       } break;
-      case OptionalType::Kind: {
-        if (!w.value.isNone()) {
-          auto t = w.static_type->expect<OptionalType>();
-          Work elem = {t->getElementType(), w.value};
-          to_process.emplace_back(std::move(elem));
+      case UnionType::Kind: {
+        auto t = w.static_type->expect<UnionType>();
+        if (t->isOptional()) {
+          if (!w.value.isNone()) {
+            Work elem = {t->getContainedElementIfOptional(), w.value};
+            to_process.emplace_back(std::move(elem));
+          }
         }
       } break;
       case UnionType::Kind: {
