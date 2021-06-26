@@ -361,7 +361,7 @@ def unpackage_script_module(importer: PackageImporter, script_module_id: str) ->
 
 if _enabled:
     # this is a Python 'non-data descriptor' that causes the first access
-    # to ScriptModule's forward to lookup the forward method and stash
+    # to ScriptModule's forward to look up the forward method and stash
     # it in the objects dict. Due to the standard rules for attribute lookup,
     # subsequent lookups will just directly return the previously looked up method.
     # This is necessary because nn.Module defines forward as a method. If we
