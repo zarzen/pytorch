@@ -4685,7 +4685,7 @@ def _in_projection_packed(
     v: Tensor,
     w: Tensor,
     b: Optional[Tensor] = None,
-) -> List[Tensor]:
+) -> Tuple[Tensor, Tensor, Tensor]:
     r"""
     Performs the in-projection step of the attention operation, using packed weights.
     Output is a triple containing projection tensors for query, key and value.
@@ -4717,7 +4717,8 @@ def _in_projection_packed(
     if k is v:
         if q is k:
             # self-attention
-            return linear(q, w, b).chunk(3, dim=-1)
+            l = linear(q, w, b).chunk(3, dim=-1)
+            return l[0], l[1], l[2]
         else:
             # encoder-decoder attention
             w_q, w_kv = w.split([E, E * 2])
@@ -4725,7 +4726,8 @@ def _in_projection_packed(
                 b_q = b_kv = None
             else:
                 b_q, b_kv = b.split([E, E * 2])
-            return (linear(q, w_q, b_q),) + linear(k, w_kv, b_kv).chunk(2, dim=-1)
+            l = (linear(q, w_q, b_q),) + linear(k, w_kv, b_kv).chunk(2, dim=-1)
+            return l[0], l[1], l[2]
     else:
         w_q, w_k, w_v = w.chunk(3)
         if b is None:
