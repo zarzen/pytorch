@@ -10,8 +10,35 @@ from torch.utils.data._typing import _DataPipeMeta
 from typing import TypeVar, Generic, Iterable, Iterator, Sequence, List, Optional, Tuple, Dict, Callable
 from ... import Tensor, Generator
 
+
 T_co = TypeVar('T_co', covariant=True)
 T = TypeVar('T')
+
+# Similar to list but expands DataFrames transparently
+class DataChunk(object):
+    def __init__(self, items):
+        self.items = items
+
+    def __getitem__(self, key):
+        return self.items[key]
+
+    def __len__(self):
+        return len(self.items)
+
+    def as_str(self, indent = ''):
+        res = "[" + ",".join([str(i) for i in iter(self)]) + "]"
+        return res        
+
+    def __str__(self):
+        return self.as_str()
+
+    def __iter__(self):
+        for i in self.items:
+            yield i
+
+    def raw_iterator(self):
+        for i in self.items:
+            yield i 
 
 
 class Dataset(Generic[T_co]):
@@ -53,12 +80,24 @@ class Dataset(Generic[T_co]):
         cls.functions[function_name] = function
 
     @classmethod
-    def register_datapipe_as_function(cls, function_name, cls_to_register):
+    def register_datapipe_as_function(cls, function_name, cls_to_register, is_df = False):
         if function_name in cls.functions:
             raise Exception("Unable to add DataPipe function name {} as it is already taken".format(function_name))
 
         def class_function(cls, source_dp, *args, **kwargs):
-            return cls(source_dp, *args, **kwargs)
+            result_pipe = cls(source_dp, *args, **kwargs)
+            if is_df or isinstance(source_dp, DFIterDataPipe) or getattr(result_pipe, '_dp_cast_to_df', False):
+                if function_name != 'trace_as_dataframe' and function_name != 'batch' and function_name != 'groupby' and function_name != 'dataframes_as_tuples':
+                    result_pipe = result_pipe.trace_as_dataframe()
+
+            if getattr(result_pipe, '_dp_nesting_depth', None) is None: 
+                result_pipe._dp_nesting_depth = getattr(source_dp, '_dp_nesting_depth', None)
+
+            if getattr(result_pipe, '_dp_contains_dataframe', None) is None: 
+                result_pipe._dp_contains_dataframe = getattr(source_dp, '_dp_contains_dataframe', None)
+
+            return result_pipe
+
         function = functools.partial(class_function, cls_to_register)
         cls.functions[function_name] = function
 
@@ -198,6 +237,8 @@ class IterableDataset(Dataset[T_co], metaclass=_DataPipeMeta):
             raise Exception("Attempt to override existing reduce_ex_hook")
         IterableDataset.reduce_ex_hook = hook_fn
 
+class DFIterDataPipe(IterableDataset):
+    pass
 
 class TensorDataset(Dataset[Tuple[Tensor, ...]]):
     r"""Dataset wrapping tensors.
