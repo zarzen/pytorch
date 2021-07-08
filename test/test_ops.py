@@ -817,7 +817,8 @@ class TestJit(JitCommonTestCase):
 
                     # Check traced forward, grad, and grad grad
                     # TODO: fix tracing here
-                    if not has_fake_function:
+                    supports_tracing = not has_fake_function
+                    if supports_tracing:
                         traced_fn = create_traced_fn(self, variant)
                         check_against_reference(self,
                                                 traced_fn,
@@ -835,6 +836,19 @@ class TestJit(JitCommonTestCase):
                         check_alias_annotation(name, (get_sample(),) + sample.args, sample.kwargs,
                                                func_type=func_type, aten_name=op.aten_name)
 
+                        # TODO: use script graph as well
+                        checked_shape_analysis = False
+                        if supports_tracing:
+                            out = variant(get_sample(),
+                                                      *sample.args,
+                                                      **sample.kwargs)
+
+                            if isinstance(out, torch.Tensor):
+                                self.checkShapeAnalysis(out.size(), traced_fn.graph, op.assert_jit_shape_analysis)
+                                checked_shape_analysis = True
+                        if op.assert_jit_shape_analysis:
+                            self.assertTrue(checked_shape_analysis)
+
                     # Check autodifferentiation of nodes for traced and scripted graphs, only need to check once per sample
                     if dtype is torch.float32:
                         # Sandcastle doesn't fuse nodes
@@ -846,7 +860,7 @@ class TestJit(JitCommonTestCase):
                             nonfusible_nodes = op.autodiff_nonfusible_nodes
                             fusible_nodes = op.autodiff_fusible_nodes
 
-                        if not has_fake_function:
+                        if supports_tracing:
                             self.assertAutodiffNode(traced_fn.last_graph, op.assert_autodiffed, nonfusible_nodes, fusible_nodes)
                         self.assertAutodiffNode(script_fn.last_graph, op.assert_autodiffed, nonfusible_nodes, fusible_nodes)
         assert tested, "JIT Test does not execute any logic"
