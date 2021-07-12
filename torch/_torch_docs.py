@@ -3587,6 +3587,54 @@ Example::
     array([-1,  2,  3])
 """)
 
+add_docstr(torch.frombuffer,
+           r"""
+frombuffer(buffer, dtype=None, count=-1, offset=0, *, requires_grad=False) -> Tensor
+
+Create a 1-dimensional :class:`Tensor` from an object that implements
+the Python buffer protocol.
+
+Interpret :attr:`buffer` as a 1-dimensional buffer of type :attr:`dtype`
+with :attr:`count` elements after the first :attr:`offset` bytes.
+
+The returned tensor and buffer share the same memory. Modifications to
+the tensor will be reflected in the buffer and vice versa. The returned
+tensor is not resizable.
+
+.. note::
+    This function increments the reference count for the object that
+    owns the shared memory. Therefore, such memory will not be deallocated
+    before the returned tensor goes out of scope.
+
+.. warning::
+    The buffer protocols has no notion of devices. Thus, this function only
+    works on CPU buffers. Passing CUDA buffers will probably lead to
+    segmentation fault (at best), but could also silently yield wrong results.
+
+Args:
+    buffer (object): a Python object that exposes the buffer interface
+    {dtype}
+    count (int, optional): the number of desired elements to be read.
+        If it is negative, all the elements (until the end of the buffer)
+        will be read. Default: -1.
+    offset (int, optional): the number of bytes to skip at the start of
+        the buffer. Default: 0.
+
+Keyword args:
+    {requires_grad}
+
+Example::
+
+    >>> import array
+    >>> a = array.array('i', [1, 2, 3])
+    >>> t = torch.frombuffer(a, dtype=torch.int32)
+    >>> t
+    tensor([ 1,  2,  3])
+    >>> t[0] = -1
+    >>> a
+    array([-1,  2,  3])
+""".format(**factory_common_args))
+
 add_docstr(torch.flatten,
            r"""
 flatten(input, start_dim=0, end_dim=-1) -> Tensor
