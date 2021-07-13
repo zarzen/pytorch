@@ -107,7 +107,8 @@ class TORCH_API MemoryDAG {
   void setWildcards(
       const std::unordered_set<const Value*>& wildcards,
       const ska::flat_hash_map<const Value*, Element*>& elementMap,
-      const std::function<Element*(const Value*)>& getWildcardElement);
+      const std::function<std::vector<Element*>(const Value*)>&
+          getWildcardElement);
   Element* unsafeMakeFreshValue(const Value* v);
 
  private:
