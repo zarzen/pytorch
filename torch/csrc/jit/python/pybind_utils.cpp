@@ -89,6 +89,7 @@ IValue toIValue(py::handle obj, const TypePtr& type, c10::optional<int32_t> N) {
           ? c10::ivalue::Tuple::createNamed(std::move(values), tuple_type)
           : c10::ivalue::Tuple::create(std::move(values));
     }
+    case TypeKind::OptionalType:
     case TypeKind::UnionType: {
       auto actual_type = toTypeInferredIValue(obj);
       auto actual_type_ptr = actual_type.type();
@@ -178,15 +179,6 @@ IValue toIValue(py::handle obj, const TypePtr& type, c10::optional<int32_t> N) {
           py::cast<py::dict>(obj),
           dict_type->getKeyType(),
           dict_type->getValueType());
-    }
-    case TypeKind::OptionalType: {
-      // check if it's a none obj since optional accepts NoneType
-      if (obj.is_none()) {
-        // check if it's a none obj since optional accepts NoneType
-        // return an IValue() to denote a NoneType
-        return {};
-      }
-      return toIValue(obj, type->expectRef<OptionalType>().getElementType());
     }
     case TypeKind::ClassType: {
       auto classType = type->expect<ClassType>();
