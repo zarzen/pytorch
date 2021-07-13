@@ -103,7 +103,7 @@ struct Block;
 
 // Each use is represented by this type, see Node::uses()
 // 'user' is the consumer of the value, offset is the index into
-// 'user's input this where the produces will be found.
+// 'user's input this where the producers will be found.
 struct Use {
   Use(Node* user, size_t offset) : user(user), offset(offset) {}
   Node* user;
@@ -1244,7 +1244,7 @@ struct Graph {
   TORCH_API Node* createEnumName(Value* e);
   TORCH_API Node* createEnumValue(Value* e);
   TORCH_API Node* createList(
-      const TypePtr& elem_type,
+      const TypePtr& contained_type,
       at::ArrayRef<Value*> values);
   TORCH_API Node* createListUnpack(Value* v, size_t size);
   TORCH_API Node* createDict(
