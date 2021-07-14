@@ -1688,6 +1688,50 @@ Example::
     False
 """)
 
+add_docstr(torch.corrcoef, r"""
+corrcoef(input) -> Tensor
+
+Estimates the Pearson product-moment correlation coefficient matrix of the variables given by the :attr:`input` matrix,
+where rows are the variables and columns are the observations.
+
+.. note::
+
+    The correlation coefficient matrix R is computed using the covariance matrix C as given by
+    :math:`R_{ij} = \frac{ C_{ij} } { \sqrt{ C_{ii} * C_{jj} } }`
+
+.. note::
+
+    Due to floating point rounding, the resulting array may not be Hermitian and its diagonal elements may not be 1.
+    The real and imaginary values are clipped to the interval [-1, 1] in an attempt to improve this situation.
+
+Args:
+    input (Tensor): A 2D matrix containing multiple variables and observations, or a
+        Scalar or 1D vector representing a single variable.
+
+Returns:
+    (Tensor) The correlation coefficient matrix of the variables.
+
+.. seealso::
+
+        :func:`torch.cov` covariance matrix.
+
+Example::
+
+    >>> x = torch.tensor([[0, 1, 2], [2, 1, 0]])
+    >>> torch.corrcoef(x)
+    tensor([[ 1., -1.],
+            [-1.,  1.]])
+    >>> x = torch.randn(2, 4)
+    >>> x
+    tensor([[-0.2678, -0.0908, -0.3766,  0.2780],
+            [-0.5812,  0.1535,  0.2387,  0.2350]])
+    >>> torch.corrcoef(x)
+    tensor([[1.0000, 0.3582],
+            [0.3582, 1.0000]])
+    >>> torch.corrcoef(x[0])
+    tensor(1.)
+""")
+
 add_docstr(torch.cov, r"""
 cov(input, *, correction=1, fweights=None, aweights=None) -> Tensor
 
@@ -1734,6 +1778,10 @@ Keyword Args:
 
 Returns:
     (Tensor) The covariance matrix of the variables.
+
+.. seealso::
+
+        :func:`torch.corrcoef` normalized covariance matrix.
 
 Example::
     >>> x = torch.tensor([[0, 2], [1, 1], [2, 0]]).T
@@ -5264,12 +5312,13 @@ Args:
 Keyword args:
     {out}
 
-
 Example::
 
     >>> a = torch.randn(3, 3)
     >>> torch.logsumexp(a, 1)
-    tensor([ 0.8442,  1.4322,  0.8711])
+    tensor([1.4907, 1.0593, 1.5696])
+    >>> torch.dist(torch.logsumexp(a, 1), torch.log(torch.sum(torch.exp(a), 1)))
+    tensor(1.6859e-07)
 """.format(**multi_dim_common))
 
 add_docstr(torch.lstsq,
@@ -8962,9 +9011,9 @@ always be real-valued, even if :attr:`input` is complex.
                default value for both is `True`, so the default behavior is
                effectively the opposite.
              * :func:`torch.svd` returns `V`, whereas :func:`torch.linalg.svd` returns
-               `Vh`, that is, `Vᴴ`.
+               `Vᴴ`.
              * If :attr:`compute_uv` is `False`, :func:`torch.svd` returns zero-filled
-               tensors for `U` and `Vh`, whereas :func:`torch.linalg.svd` returns
+               tensors for `U` and `Vᴴ`, whereas :func:`torch.linalg.svd` returns
                empty tensors.
 
 .. note:: The singular values are returned in descending order. If :attr:`input` is a batch of matrices,
@@ -10681,55 +10730,157 @@ Example::
             [2, 2],
             [2, 3],
             [3, 3]])
+
 """)
 
 add_docstr(torch.trapezoid,
            r"""
-trapezoid(y, x, *, dim=-1) -> Tensor
+trapezoid(y, x=None, *, dx=None, dim=-1) -> Tensor
 
-Estimate :math:`\int y\,dx` along `dim`, using the trapezoid rule.
+Estimates the definite integral of a given function (i.e. :math:`\int f(x)\,dx`),
+by applying the `trapezoidal rule <https://en.wikipedia.org/wiki/Trapezoidal_rule>`_
+along the dimension specified by `dim`, with spacing specified by :attr:`x` or :attr:`dx`.
+
+The trapezoidal rule is a technique for approximating the definite integral of
+a function by averaging the left and right Riemann sums. The approximation
+becomes more accurate as the resolution of the partition increases.
+
+In the case where coordinates :math:`{x_0, x_1, ..., x_n}` are specified
+and :math:`y_i = f(x_i)`:
+
+.. math::
+    \begin{aligned}
+        \sum_{i = 1}^{n} \frac{(x_i - x_{i-1})}{2} (y_i + y_{i-1})
+    \end{aligned}
+
+When uniform spacing :math:`\Delta x` is supplied this simplifies to:
+
+.. math::
+    \begin{aligned}
+        \sum_{i = 1}^{n} \frac{\Delta x}{2} (y_i + y_{i-1})
+    \end{aligned}
+
+The integration is performed along the specified :attr:`dim`, with the last dimension
+as default. See the examples given below.
+
+Note that either a tensor :attr:`x` or a scalar :attr:`dx` can be supplied for this estimation.
+If neither is given, the default argument of :attr:`dx=1` will be used.
+The usage of :attr:`dx` (in place of :attr:`x`) is further described in the bottom section of this page.
+
+In the input arguments, tensors :attr:`x` and :attr:`y` should be specified such that
+:math:`y(i) = f(x(i))` where `i` is an index. This is true even for
+multi-dimensional tensors where `i` is an index in the form of
+a tuple :math:`(a, b, c,...)`. For example, if you wish to use 3 pairs
+of :math:`(x_i, y_i)` points as inputs, your input tensors should
+be :math:`x = [x_0, x_1, x_2]` and :math:`y = [y_0, y_1, y_2]`. Broadcasting
+allows :attr:`x` to have a smaller dimension than that of :attr:`y`, but after
+the :attr:`x` tensor is broadcast, the mapping between :attr:`x` and :attr:`y` via indices applies.
 
 Arguments:
     y (Tensor): The values of the function to integrate
-    x (Tensor): The points at which the function `y` is sampled.
+    x (Tensor): The points at which the function :attr:`y` is sampled.
         If `x` is not in ascending order, intervals on which it is decreasing
         contribute negatively to the estimated integral (i.e., the convention
-        :math:`\int_a^b f = -\int_b^a f` is followed).
+        :math:`\int_a^b f = -\int_b^a f` is followed). If consecutive values within :attr:`x`
+        are the same, the interval contributes 0 to the estimated integral. If :attr:`x`'s dimension
+        does not match that of :attr:`y`, it will attempt to broadcast `x` to match :attr:`y`.
     dim (int): The dimension along which to integrate.
-        By default, use the last dimension.
+        By default, use the last (inner-most) dimension.
 
 Returns:
     A Tensor with the same shape as the input, except with `dim` removed.
     Each element of the returned tensor represents the estimated integral
     :math:`\int y\,dx` along `dim`.
 
-Example::
+Examples::
 
-    >>> y = torch.randn((2, 3))
-    >>> y
-    tensor([[-2.1156,  0.6857, -0.2700],
-            [-1.2145,  0.5540,  2.0431]])
-    >>> x = torch.tensor([[1, 3, 4], [1, 2, 3]])
+    >>> # Compute the integral of y with 1-D tensors of coordinates.
+    >>> y = torch.tensor([10, 10, 20])
+    >>> x = torch.tensor([0, 1, 2])
     >>> torch.trapezoid(y, x)
-    tensor([-1.2220,  0.9683])
+    tensor(25.)
+
+    >>> # Compute the integral of y with 2-D tensors of coordinates.
+    >>> y = torch.tensor([[10, 10, 20], [0, 10, 20]])
+    >>> x = torch.tensor([[0, 1, 2], [0, 10, 11]])
+    >>> torch.trapezoid(y, x)
+    tensor([25., 65.])
+
+    >>> # Compute the integral of y with 2-D tensors of coordinates,
+    >>> # but use dim=0 to integrate over the outer dimension.
+    >>> y = torch.tensor([[0, 10, 20], [10, 20, 40]])
+    >>> x = torch.tensor([[0, 0, 0], [1, 1, 1]])
+    >>> torch.trapezoid(y, x, dim=0)
+    tensor([0., 15., 30])
+
+    >>> # Since the dimension of two tensors do not match, it
+    >>> # attempts to broadcast x to match the dimension of y.
+    >>> y = torch.tensor([[10, 10, 20], [0, 10, 20]])
+    >>> x = torch.tensor([0, 1, 2])
+    >>> torch.trapezoid(y, x)
+    tensor([25., 20.])
+
+    >>> # Compute the integral of y with 3-D tensors of coordinates.
+    >>> y = torch.tensor(np.arange(8).reshape((2,2,2)))
+    >>> y
+    tensor([[[0, 1],
+             [2, 3]],
+            [[4, 5],
+             [6, 7]]])
+    >>> x = torch.tensor(np.arange(8).reshape((2,2,2)))
+    >>> x
+    tensor([[[0, 1],
+             [2, 3]],
+            [[4, 5],
+             [6, 7]]])
+    >>> torch.trapezoid(y, x)
+    tensor([[0.5000, 2.5000],
+            [4.5000, 6.5000]])
 
 .. function:: trapezoid(y, *, dx=1, dim=-1) -> Tensor
 
-As above, but the sample points are spaced uniformly at a distance of `dx`.
+Alternatively, instead of specifying all values to integrate over with tensor :attr:`x`,
+you can pass in a scalar argument :attr:`dx`, which represents the uniform distance
+between the sample points. By default, :attr:`dx=1`, that is equivalent to
+having :math:`x = [0.0, 1.0, ...]` up to the number of elements in :attr:`y`.
+
+Note that you cannot pass both :attr:`x` and :attr:`dx` as arguments, because :attr:`x` allows you
+to specify the desired spacing for every interval within the integral, such that
+passing in :attr:`dx` will not provide additional useful information.
+
 
 Arguments:
     y (Tensor): The values of the function to integrate
 
 Keyword args:
     dx (Scalar): The distance between points at which `y` is sampled.
-        Currently, only flooat/double types are supported.
+        Currently, only float/double types are supported.
     dim (int): The dimension along which to integrate.
-        By default, use the last dimension.
+        By default, use the last (inner-most) dimension.
 
 Returns:
     A Tensor with the same shape as the input, except with `dim` removed.
     Each element of the returned tensor represents the estimated integral
-    :math:`\int y\,dx` along `dim`.
+    :math:`\int y\,dx` along :attr:`dim`.
+
+Examples::
+
+    >>> # By default, dx = 1.0.
+    >>> y = torch.tensor([0, 10, 20])
+    >>> torch.trapezoid(y)
+    tensor(20.)
+    >>> torch.trapezoid(y, dx=2.0)
+    tensor(40.)
+
+    >>> # The same dx (spacing) is used for each integration.
+    >>> y = torch.tensor([[0, 10, 20], [0, 20, 40]])
+    >>> torch.trapezoid(y, dx=2.0)
+    tensor([40., 80.])
+
+    >>> # You can also specify dim while using dx.
+    >>> y = torch.tensor([[0, 10, 20], [0, 20, 40]])
+    >>> torch.trapezoid(y, dx=2.0, dim=0)
+    tensor([40., 30., 60.])
 """)
 
 add_docstr(torch.trapz,
