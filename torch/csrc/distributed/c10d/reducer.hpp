@@ -241,6 +241,11 @@ class TORCH_API Reducer {
 
   void finalize_backward();
 
+  // Returns mapping of intra bucket index for parameter gradient to the
+  // corresponding model parameter.
+  std::unordered_map<size_t, at::Tensor> get_variables_for_bucket(
+      size_t bucket_index, const Bucket& bucket) const;
+
   // Asserts that the reduction for the previous iteration has finished before
   // rebuilding buckets or kicking off the next one.
   void ensure_prior_reduction_finished();
@@ -514,6 +519,11 @@ class TORCH_API Reducer {
   void checkAndRaiseMarkedTwiceError(size_t curVariableIndex);
   // Retrieves parameter corresponding to the given VariableIndex.
   at::Tensor& get_param_from_index(size_t index);
+
+  // Cached bucket index to model parameter mapping. Populated after buckets
+  // are rebuilt after which this mapping is static.
+  mutable std::unordered_map<size_t, std::unordered_map<size_t, at::Tensor>>
+      cached_variables_for_bucket_;
 
   friend class Logger;
 };
