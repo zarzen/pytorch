@@ -1030,6 +1030,10 @@ Tensor alias_with_sizes_and_strides(
   return self_;
 }
 
+Tensor alias_to_shape(const Tensor& self, IntArrayRef sizes, IntArrayRef strides) {
+  return alias_with_sizes_and_strides(self, sizes, strides);
+}
+
 Tensor reshape(const Tensor& self, IntArrayRef proposed_shape) {
   if (self.is_sparse()) {
     AT_ERROR("reshape is not implemented for sparse tensors");
@@ -1040,17 +1044,18 @@ Tensor reshape(const Tensor& self, IntArrayRef proposed_shape) {
     return at::_mkldnn_reshape(self, shape);
   }
 
-  auto stride =
-      at::detail::computeStride(self.sizes(), self.strides(), shape);
-    // `computeStride` returns the proper strides to use if this
-    // `reshape` can be just a view.
-    //
-    // NB: Even though we have viewable geometry and the target strides here,
-    //     we do not just call `as_strided` on `self` because the backward
-    //     for `as_strided` is not as efficient as that of `view` (since the
-    //     former is meant to handle general cases).
+  auto stride = at::detail::computeStride(self.sizes(), self.strides(), shape);
+  // `computeStride` returns the proper strides to use if this
+  // `reshape` can be just a view.
+  //
+  // NB: Even though we have viewable geometry and the target strides here,
+  //     we do not just call `as_strided` on `self` because the backward
+  //     for `as_strided` is not as efficient as that of `view` (since the
+  //     former is meant to handle general cases).
   if (stride.has_value()) {
-    return self.view(shape);
+    // Instead of delegating to .view() which repeats some of the above work
+    // directly return an alias.
+    return self.alias_to_shape(IntArrayRef(shape), IntArrayRef(stride.value()));
   }
   return at::_unsafe_view(self.clone(at::MemoryFormat::Contiguous), shape);
 }
@@ -2152,11 +2157,13 @@ Tensor numpy_T(const Tensor &self) {
   return self.permute(transpose_dims);
 }
 
-Tensor view(const Tensor& self, IntArrayRef size) {
+Tensor view(const Tensor& self,
+            IntArrayRef size) {
+
   at::DimVector inferred_size = at::infer_size_dv(size, self.numel());
   auto stride = at::detail::computeStride(self.sizes(),
-                                          self.strides(),
-                                          inferred_size);
+                                        self.strides(),
+                                        inferred_size);
   TORCH_CHECK(stride.has_value(), "view size is "
     "not compatible with input tensor's size and stride (at least one dimension"
     " spans across two contiguous subspaces). Use .reshape(...) instead.");

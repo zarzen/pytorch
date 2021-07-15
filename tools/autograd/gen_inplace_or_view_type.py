@@ -33,6 +33,7 @@ VIEW_FUNCTIONS_WITH_METADATA_CHANGE = ['view_as_complex', 'view_as_real', '_conj
 VIEW_FUNCTIONS = {
     'numpy_T': 'self',
     'alias': 'self',
+    'alias_to_shape': 'self',
     'as_strided': 'self',
     'diagonal': 'self',
     'expand': 'self',

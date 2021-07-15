@@ -249,6 +249,10 @@
   self: grad
   result: self_t
 
+- name: alias_to_shape(Tensor(a) self, int[] sizes, int[] strides) -> Tensor(a)
+  self: grad.reshape(self.sizes())
+  result: self_t
+
 - name: angle(Tensor self) -> Tensor
   self: angle_backward(grad, self)
   result: handle_r_to_c(result.scalar_type(), angle_backward(self_t, self_p))
