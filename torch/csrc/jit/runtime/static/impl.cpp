@@ -9,6 +9,7 @@
 #include <caffe2/core/timer.h>
 #include <torch/csrc/jit/ir/alias_analysis.h>
 #include <torch/csrc/jit/passes/canonicalize.h>
+#include <torch/csrc/jit/passes/concat_opt.h>
 #include <torch/csrc/jit/passes/dead_code_elimination.h>
 #include <torch/csrc/jit/passes/freeze_module.h>
 #include <torch/csrc/jit/passes/remove_mutation.h>
@@ -62,6 +63,7 @@ void OptimizeGraph(
   ConstantPropagation(graph);
   RemoveTensorMutation(graph);
   ConstantPropagation(graph);
+  UseVariadicCat(graph);
   EliminateDeadCode(graph);
   FuseInferenceOpsForSparseNN(graph);
 
@@ -1387,9 +1389,13 @@ void ProcessedNode::run() {
   } else {
     std::vector<IValue> stack;
     const size_t size = node_->inputs().size();
-    stack.reserve(size);
+    stack.reserve(size + 1);
     for (const auto i : c10::irange(size)) {
       stack.emplace_back(Input(i));
+    }
+    // Need to store the number of inputs in stack for variadic ops.
+    if (hasVarArgs(node_)) {
+      stack.emplace_back(static_cast<int>(size));
     }
 
     DCHECK(op_);

@@ -189,6 +189,14 @@ std::function<void(ProcessedNode*)> getOutOfPlaceOperation(Node* n) {
   return nullptr;
 }
 
+// Returns true if the node represents an op with variadic arguments.
+bool hasVarArgs(Node* n) {
+  if (n->kind() == prim::Concat) {
+    return true;
+  }
+  return false;
+}
+
 // Expensive check, use sparingly.
 // This is needed to make sure that we only switch to out variants for the
 // supported overloads, which is checked in the `Generate` step in
@@ -1511,6 +1519,24 @@ REGISTER_OPERATOR_FUNCTOR(aten::full_like, aten_full_like, [](Node* n) -> SROper
     auto& out_t = p_node->Output(0).toTensor();
     at::native::resize_(out_t, in0_t.sizes(), c10::nullopt);
     at::native::fill_out(out_t, in1_s);
+  };
+});
+
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+REGISTER_OPERATOR_FUNCTOR(prim::Concat, prim_Concat, [](Node* n) -> SROperator {
+  return [](ProcessedNode* p_node) {
+    const size_t num_inputs = p_node->inputs().size();
+    std::vector<at::Tensor> inputs(num_inputs - 1);
+    for (const auto i : c10::irange(num_inputs - 1)) {
+      inputs[i] = p_node->Input(i).toTensor();
+    }
+    const auto dim = p_node->Input(num_inputs - 1).toInt();
+    if (p_node->Output(0).isNone()) {
+      p_node->Output(0) = at::cat(inputs, dim);
+    } else {
+      auto& out_t = p_node->Output(0).toTensor();
+      at::native::cat_out(inputs, dim, out_t);
+    }
   };
 });
 
