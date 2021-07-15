@@ -7513,3 +7513,69 @@ class DistributedTest:
                 [param.grad for param in model_local.parameters()]
             )
             self.assertEqual(dist_grad_tensor, local_grad_tensor)
+
+        @unittest.skipIf(
+            BACKEND != "nccl" and BACKEND != "gloo",
+            "MPI backend does not support DDP communication hook on CUDA devices",
+        )
+        @skip_if_lt_x_gpu(2)
+        @skip_if_rocm
+        def test_grad_bucket_retrieve_model_params(self):
+            torch.manual_seed(self.rank)
+            # Test hook to ensure get_grad_index_to_variable_mapping works appropriately.
+
+            def _test_hook(
+                grad_as_bucket_view, bucket: dist.GradBucket
+            ) -> torch.futures.Future:
+                # Run allreduce and wait for it to complete
+                allreduce_fut = default._allreduce_fut(None, bucket.get_tensor())
+                allreduce_fut.wait()
+                per_param_grad_tensors = bucket.get_per_parameter_tensors()
+                model_params = bucket.get_model_params_for_bucket()
+                # Verify mapping is correct by ensuring param.grad is equal to
+                # the grad we get using the mapping when gradient_as_bucket_view
+                # is True. When gradient_as_bucket_view=False, only verify shape
+                # since gradient is only written back to param.grad after hook.
+                for grad, model_param in zip(per_param_grad_tensors, model_params):
+                    if grad_as_bucket_view:
+                        self.assertEqual(model_param.grad, grad)
+                    else:
+                        # Only check shape (see above)
+                        self.assertEqual(model_param.grad.shape, grad.shape)
+                # Return completed future.
+                fut = torch.futures.Future()
+                fut.set_result([bucket.get_tensor()])
+                return fut
+
+            models_to_test = [
+                (Net, torch.randn(2, 2)),
+                (LargeNet, torch.randn(2, 1000)),
+            ]
+
+            if HAS_TORCHVISION:
+                models_to_test.append(
+                    (
+                        torchvision.models.resnet50,
+                        torch.randn(1, 3, 1000, 1000)
+                    )
+                )
+
+            torch.cuda.set_device(self.rank)
+            for (model_cls, inp), grad_as_bucket_view in itertools.product(
+                models_to_test,
+                [True, False]
+            ):
+                model = model_cls().cuda()
+                ddp_model = torch.nn.parallel.DistributedDataParallel(
+                    model,
+                    device_ids=[self.rank],
+                    gradient_as_bucket_view=grad_as_bucket_view
+                )
+                ddp_model.register_comm_hook(grad_as_bucket_view, _test_hook)
+                inp = inp.cuda()
+                for i in range(6):
+                    out = ddp_model(inp)
+                    # Scale up gradients, otherwise gradients are too small and
+                    # self.assertEqual tolerance may cause false positives.
+                    loss = out.sum() * 1e9
+                    loss.backward()
