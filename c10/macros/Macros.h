@@ -60,6 +60,23 @@
 #define C10_ASAN_ENABLED 0
 #endif
 
+// Check Thread Sanitizer is available and define macro for disabling attribute
+// for clang
+#if defined(__has_feature)
+#if ((__has_feature(thread_sanitizer)))
+#define C10_NO_TSAN __attribute__((no_sanitize("thread")))
+#endif
+#endif
+
+// gcc
+#if !defined(C10_NO_TSAN)
+#if defined(__SANITIZE_THREAD__)
+#define C10_NO_TSAN __attribute__((no_sanitize("thread")))
+#else
+#define C10_NO_TSAN
+#endif
+#endif
+
 // Disable the copy and assignment operator for a class. Note that this will
 // disable the usage of the class in std containers.
 #define C10_DISABLE_COPY_AND_ASSIGN(classname) \
