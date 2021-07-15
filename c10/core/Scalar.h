@@ -24,6 +24,11 @@ namespace c10 {
  */
 class C10_API Scalar {
  public:
+  // constructor tag used by empty scalar constructor
+  struct MakeEmptyScalar {};
+
+  explicit Scalar(MakeEmptyScalar) : tag(Tag::HAS_n) {}
+
   Scalar() : Scalar(int64_t(0)) {}
 
 #define DEFINE_IMPLICIT_CTOR(type, name) \
@@ -147,6 +152,10 @@ class C10_API Scalar {
     }
   }
 
+  bool hasValue() const {
+    return Tag::HAS_n != tag;
+  }
+
  private:
   template <
       typename T,
@@ -176,7 +185,7 @@ class C10_API Scalar {
   // We can't set v in the initializer list using the
   // syntax v{ .member = ... } because it doesn't work on MSVC
 
-  enum class Tag { HAS_d, HAS_i, HAS_z, HAS_b };
+  enum class Tag { HAS_d, HAS_i, HAS_z, HAS_b, HAS_n };
   Tag tag;
   union v_t {
     double d;
@@ -184,6 +193,27 @@ class C10_API Scalar {
     c10::complex<double> z;
     v_t() {} // default constructor
   } v;
+};
+
+struct OptionalScalarRef {
+  OptionalScalarRef() : empty_(Scalar::MakeEmptyScalar{}), scalar_(empty_) {}
+  OptionalScalarRef(const Scalar& scalar) : scalar_(scalar) {}
+
+  bool has_value() const {
+    return scalar_.hasValue();
+  }
+
+  const Scalar& toScalar() const {
+    return scalar_;
+  }
+
+  operator bool() const {
+    return has_value();
+  }
+
+ private:
+  const Scalar empty_;
+  const Scalar& scalar_;
 };
 
 // define the scalar.to<int64_t>() specializations

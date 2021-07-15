@@ -1034,8 +1034,8 @@
   device_check: NoCheck   # TensorIterator
   variants: function, method
   cpp_no_default_args: ['min']
+  structured_delegate: clamp.out
   dispatch:
-    CPU, CUDA: clamp
     QuantizedCPU: clamp_quantized_cpu
 
 - func: clamp.Tensor(Tensor self, Tensor? min=None, Tensor? max=None) -> Tensor
@@ -1047,6 +1047,7 @@
   device_check: NoCheck   # TensorIterator
   variants: function, method
   cpp_no_default_args: ['min']
+  structured_delegate: clamp.out
   dispatch:
     CompositeExplicitAutograd: clamp_
 
@@ -1058,6 +1059,8 @@
 - func: clamp.out(Tensor self, Scalar? min=None, Scalar? max=None, *, Tensor(a!) out) -> Tensor(a!)
   device_check: NoCheck   # TensorIterator
   cpp_no_default_args: ['min']
+  structured: True
+  structured_inherits: TensorIteratorBase
   dispatch:
     CPU, CUDA: clamp_out
 
