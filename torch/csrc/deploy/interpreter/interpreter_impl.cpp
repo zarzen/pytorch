@@ -288,7 +288,8 @@ struct InitLockAcquire {
   std::mutex& init_lock_;
 };
 
-struct ConcreteInterpreterImpl : public torch::deploy::InterpreterImpl {
+struct __attribute__((visibility("hidden"))) ConcreteInterpreterImpl
+    : public torch::deploy::InterpreterImpl {
   ConcreteInterpreterImpl() {
 #define APPEND_INIT(name) PyImport_AppendInittab(#name, PyInit_##name);
     FOREACH_LIBRARY(APPEND_INIT)
@@ -381,7 +382,7 @@ struct ConcreteInterpreterImpl : public torch::deploy::InterpreterImpl {
   std::mutex init_lock_;
 };
 
-struct ConcreteInterpreterSessionImpl
+struct __attribute__((visibility("hidden"))) ConcreteInterpreterSessionImpl
     : public torch::deploy::InterpreterSessionImpl {
   ConcreteInterpreterSessionImpl(ConcreteInterpreterImpl* interp)
       : interp_(interp) {}
@@ -539,3 +540,7 @@ torch::deploy::InterpreterImpl*
 new_interpreter_impl(void) {
   return new ConcreteInterpreterImpl();
 }
+
+// with -nostdlib passed to linker, we need to make it thing
+// this symbol will exist, otherwise it emits a relocation error.
+__attribute__((weak)) void* __dso_handle;

@@ -137,7 +137,9 @@ ReplicatedObj InterpreterSession::create_movable(Obj obj) {
 void write_tmp_lib(FILE* dst, char* lib_start, char* lib_end) {
   TORCH_INTERNAL_ASSERT(dst);
   size_t size = lib_end - lib_start;
+  std::cout << "WRITING " << size / (1024.0*1024.0) << "MB\n";
   TORCH_INTERNAL_ASSERT(size == fwrite(lib_start, 1, size, dst));
+  std::cout << "DONE\n";
 }
 
 Interpreter::Interpreter(InterpreterManager* manager)
@@ -176,7 +178,7 @@ Interpreter::Interpreter(InterpreterManager* manager)
 
   write_tmp_lib(dst, lib_start, lib_end);
   fclose(dst);
-  handle_ = dlopen(library_name, RTLD_LOCAL | RTLD_LAZY);
+  handle_ = dlopen(library_name, RTLD_LOCAL | RTLD_LAZY | RTLD_DEEPBIND);
   if (!handle_) {
     throw std::runtime_error(dlerror());
   }
@@ -186,8 +188,14 @@ Interpreter::Interpreter(InterpreterManager* manager)
   // for the debugger to see it.
   unlink(library_name_.c_str());
 
+#ifndef FBCODE_CAFFE2
+  auto deploy_set_self_ptr = (void (*)(void*))dlsym(handle_, "deploy_set_self");
+  AT_ASSERT(deploy_set_self_ptr);
+  deploy_set_self_ptr(handle_);
+#endif
+
   void* new_interpreter_impl = dlsym(handle_, "new_interpreter_impl");
-  assert(new_interpreter_impl);
+  AT_ASSERT(new_interpreter_impl);
   pImpl_ = std::unique_ptr<InterpreterImpl>(
       // NOLINTNEXTLINE(modernize-redundant-void-arg)
       ((InterpreterImpl * (*)(void)) new_interpreter_impl)());
@@ -197,6 +205,9 @@ Interpreter::~Interpreter() {
   if (handle_) {
     // ensure python uninitialization runs before we dlclose the library
     pImpl_.reset();
+    auto deploy_flush_python_libs =
+        (void (*)(void))dlsym(handle_, "deploy_flush_python_libs");
+    deploy_flush_python_libs();
     dlclose(handle_);
   }
 }

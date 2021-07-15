@@ -14,6 +14,7 @@ ExternalProject_Add(
   GIT_REPOSITORY https://github.com/python/cpython.git
   GIT_TAG v3.8.6
   UPDATE_COMMAND ""
+  PATCH_COMMAND git apply ${CMAKE_CURRENT_SOURCE_DIR}/cpython_patch.diff
   BUILD_IN_SOURCE True
   CONFIGURE_COMMAND CFLAGS=-fPIC CPPFLAGS=-fPIC <SOURCE_DIR>/configure --prefix ${PYTHON_INSTALL_DIR}
   BUILD_COMMAND CFLAGS=-fPIC CPPFLAGS=-fPIC make -j8
@@ -83,25 +84,27 @@ target_include_directories(torch_python_obj BEFORE PRIVATE ${PYTHON_INC_DIR})
 add_library(torch_python_static STATIC $<TARGET_OBJECTS:torch_python_obj>)
 # Build the interpreter lib, designed to be standalone and dlopened
 # We bake the python and torch_python binding objs into libinterpreter
-set(LINKER_SCRIPT "${INTERPRETER_DIR}/hide_symbols.script")
 set(INTERPRETER_LIB_SOURCES
   ${INTERPRETER_DIR}/interpreter_impl.cpp
+  ${INTERPRETER_DIR}/linker.cpp
+  ${INTERPRETER_DIR}/import_find_sharedfuncptr.cpp
   ${FROZEN_FILES}
   ${LINKER_SCRIPT}
 )
 add_library(torch_deployinterpreter ${INTERPRETER_LIB_SOURCES} ${LINKER_SCRIPT})
-set_property(TARGET torch_deployinterpreter APPEND_STRING PROPERTY
-             LINK_FLAGS " -Wl,--version-script=${LINKER_SCRIPT}")
 # need to ensure headers are present before any .cpp in interpreter are compiled,
 # but cpp themselves don't clearly depend on cpython so there is a race otherwise
 add_dependencies(torch_deployinterpreter cpython)
 add_dependencies(torch_python_obj cpython)
-target_compile_options(
-    torch_deployinterpreter PRIVATE
-    -fvisibility=hidden
-)
+
 target_include_directories(torch_deployinterpreter PRIVATE ${INTERPRETER_DIR})
 target_include_directories(torch_deployinterpreter PUBLIC ${PYTHON_INC_DIR})
+
+# we do not want to have torch_deployinterpreter linked against libc++ because
+# when loading it with RTLD_DEEPBIND it will resolve std::cout to the copy in libc++ instead of the
+# one in the main process (see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=42679).
+# nostdlib excludes all the standard libraries then -lc and -lgcc adds back the libraries for for libc
+# which are necessary to be there otherwise Python does not initialize properly.
+target_link_libraries(torch_deployinterpreter PRIVATE -nostdlib -lc -lgcc)
 target_link_libraries(torch_deployinterpreter PRIVATE ${PYTHON_LIB} ${PYTHON_STDLIB} torch_python_static)
-target_link_libraries(torch_deployinterpreter PRIVATE crypt crypto ssl pthread dl util m z ffi lzma readline nsl ncursesw panelw) # for python builtins
 target_link_libraries(torch_deployinterpreter PRIVATE fmt::fmt-header-only protobuf::libprotobuf-lite)
