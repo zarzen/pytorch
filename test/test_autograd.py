@@ -5695,6 +5695,37 @@ for shape in [(1,), ()]:
         self.assertEqual(b, b_unpacked)
         self.assertEqual(b._version, b_unpacked._version)
 
+    def test_saved_variable_packing_unpacking(self):
+        a = torch.randn(5, requires_grad=True)
+        y = a * a
+        y.grad_fn._raw_saved_self.register_hooks(lambda x: 2 * x, lambda x: x / 2)
+        self.assertEqual(a, y.grad_fn._saved_self)
+
+        a = torch.randn(5, requires_grad=True)
+        y = a * a
+        y.grad_fn._raw_saved_self.register_hooks(lambda x: 2 * x, lambda x: x)
+        self.assertEqual(2 * a, y.grad_fn._saved_self)
+
+        a = torch.randn(5, requires_grad=True)
+        y = a * a
+        y.grad_fn._raw_saved_self.register_hooks(lambda x: x, lambda x: 1)
+        with self.assertRaisesRegex(TypeError, "Output of saved tensor unpack_hook expected to be a Tensor"):
+            print(y.grad_fn._saved_self)
+
+        def inplace_double(x):
+            x *= 2
+            return x
+
+        a = torch.ones(5, requires_grad=True)
+        t = a * a
+
+        t.grad_fn._raw_saved_self.register_hooks(inplace_double, lambda x: x / 2)
+        y = t * 2
+        with self.assertRaisesRegex(
+                RuntimeError,
+                "one of the variables needed for gradient computation has been modified by an inplace operation"):
+            y.sum().backward()
+
 
 def index_perm_variable(shape, max_indices):
     if not isinstance(shape, tuple):
