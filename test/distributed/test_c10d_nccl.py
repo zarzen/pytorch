@@ -382,7 +382,7 @@ class ProcessGroupNCCLTest(TestCase):
         pg = c10d.ProcessGroupNCCL(store, self.rank, self.world_size)
 
         def allgather_base(output_t, input_t):
-            work = pg._allgather_base(output_t, input_t)
+            work = pg._allgather_base([output_t], [input_t])
             work.wait()
 
         device_id = self.rank % self.num_gpus
@@ -402,7 +402,7 @@ class ProcessGroupNCCLTest(TestCase):
         pg = c10d.ProcessGroupNCCL(store, self.rank, self.world_size)
 
         def allgather_base(output_t, input_t):
-            work = pg._allgather_base(output_t, input_t)
+            work = pg._allgather_base([output_t], [input_t])
             work.wait()
 
         device_id = self.rank % self.num_gpus

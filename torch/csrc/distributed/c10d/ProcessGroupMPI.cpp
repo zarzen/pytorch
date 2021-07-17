@@ -914,8 +914,8 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupMPI::barrier(
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupMPI::_allgather_base(
-    at::Tensor& /*unused */,
-    at::Tensor& /*unused */,
+    std::vector<at::Tensor>& /*unused */,
+    std::vector<at::Tensor>& /*unused */,
     const AllgatherOptions& /*unused */) {
   TORCH_CHECK(false,
       "no support for _allgather_base in MPI process group");

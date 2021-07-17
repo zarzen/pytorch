@@ -233,8 +233,8 @@ class TORCH_API ProcessGroup : public torch::CustomClassHolder {
   // For implementers of ProcessGroup API and advanced users only.
   // Note: this function will be deprecated in near future.
   virtual c10::intrusive_ptr<ProcessGroup::Work> _allgather_base(
-      at::Tensor& outputBuffer,
-      at::Tensor& inputBuffer,
+      std::vector<at::Tensor>& outputTensors,
+      std::vector<at::Tensor>& inputTensors,
       const AllgatherOptions& opts = AllgatherOptions()) = 0;
 
   // This function is deprecated and will be moved out of ProcessGroup to comms:

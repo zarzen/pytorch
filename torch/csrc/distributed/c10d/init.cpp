@@ -1031,8 +1031,8 @@ Arguments:
           .def(
               "_allgather_base",
               &::c10d::ProcessGroup::_allgather_base,
-              py::arg("output"),
-              py::arg("input"),
+              py::arg("output_tensors"),
+              py::arg("input_tensors"),
               py::arg("opts") = ::c10d::AllgatherOptions(),
               py::call_guard<py::gil_scoped_release>())
 

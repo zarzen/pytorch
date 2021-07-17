@@ -224,12 +224,11 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupWrapper::allgather(
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupWrapper::_allgather_base(
-    at::Tensor& outputBuffer,
-    at::Tensor& inputBuffer,
+    std::vector<at::Tensor>& outputTensors,
+    std::vector<at::Tensor>& inputTensors,
     const AllgatherOptions& opts) {
-  std::vector<at::Tensor> inputTensors({inputBuffer});
   runCollectiveChecks(OpType::_ALLGATHER_BASE, inputTensors);
-  return pg_->_allgather_base(outputBuffer, inputBuffer, opts);
+  return pg_->_allgather_base(outputTensors, inputTensors, opts);
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupWrapper::allgather_coalesced(

@@ -1984,14 +1984,14 @@ def all_gather(tensor_list, tensor, group=None, async_op=False):
         work.wait()
 
 
-def _all_gather_base(output_tensor, input_tensor, group=None, async_op=False):
+def _all_gather_base(output_tensors, input_tensors, group=None, async_op=False):
     """
     Single tensor all gather. Gathers a single tensor from all ranks, and puts them in a single output tensor.
 
     Args:
-        output_tensor (Tensor): Output tensor. It should contain
+        output_tensors (list[Tensor]): Each tensor, in the output_tensors, should contain
             correctly-sized tensors to be used for output of the collective.
-        input_tensor (Tensor): Tensor to be broadcast from current process.
+        input_tensors (list[Tensor]): Tensors to be broadcast from current process.
         group (ProcessGroup, optional): The process group to work on. If None,
             the default process group will be used.
         async_op (bool, optional): Whether this op should be an async op
@@ -2021,27 +2021,29 @@ def _all_gather_base(output_tensor, input_tensor, group=None, async_op=False):
         is correctly sized.
 
     """
-    _check_single_tensor(input_tensor, "input_tensor")
-    _check_single_tensor(output_tensor, "output_tensor")
+    _check_tensor_list(input_tensors, "input_tensors")
+    _check_tensor_list(output_tensors, "output_tensors")
     if _rank_not_in_group(group):
         return
 
-    output_tensor = (
-        output_tensor
-        if not output_tensor.is_complex()
-        else torch.view_as_real(output_tensor)
-    )
-    input_tensor = (
-        input_tensor
-        if not input_tensor.is_complex()
-        else torch.view_as_real(input_tensor)
-    )
+    output_tensors = [
+        output_ 
+        if not output_.is_complex()
+        else torch.view_as_real(output_)
+        for output_ in output_tensors
+    ]
+    input_tensors = [
+        input_ 
+        if not input_.is_complex() 
+        else torch.view_as_real(input_) 
+        for input_ in input_tensors
+    ]
 
     if group is None:
         default_pg = _get_default_group()
-        work = default_pg._allgather_base(output_tensor, input_tensor)
+        work = default_pg._allgather_base(output_tensors, input_tensors)
     else:
-        work = group._allgather_base(output_tensor, input_tensor)
+        work = group._allgather_base(output_tensors, input_tensors)
 
     if async_op:
         return work

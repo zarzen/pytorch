@@ -245,8 +245,8 @@ class TORCH_API ProcessGroupGloo : public ProcessGroup {
       const AllgatherOptions& opts = AllgatherOptions()) override;
 
   c10::intrusive_ptr<ProcessGroup::Work> _allgather_base(
-      at::Tensor& outputBuffer,
-      at::Tensor& inputBuffer,
+      std::vector<at::Tensor>& outputTensors,
+      std::vector<at::Tensor>& inputTensors,
       const AllgatherOptions& opts = AllgatherOptions()) override;
 
   c10::intrusive_ptr<ProcessGroup::Work> allgather_coalesced(

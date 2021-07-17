@@ -242,7 +242,8 @@ class AllgatherBaseNCCLTest : public NCCLTest {
  public:
   AllgatherBaseNCCLTest(const std::string& path, int worldSize)
       : NCCLTest(path, worldSize) {
-        output_tensor_ = at::empty({worldSize_, 3, 3}, at::kCUDA);
+        auto output_tensor_ = at::empty({worldSize_, 3, 3}, at::kCUDA);
+        outputs_ = std::vector<at::Tensor> {output_tensor_};
       }
 
   c10::intrusive_ptr<c10d::ProcessGroup::Work> run() {
@@ -254,12 +255,13 @@ class AllgatherBaseNCCLTest : public NCCLTest {
     // contains at least one element otherwise wouldn't run.
     // this is a flattened allgather, hence one rank contributes
     // only 1 tensor, regardless of number of devices
-    return pg_->_allgather_base(output_tensor_, tensors_[0]);
+    auto inputs = std::vector<at::Tensor> {tensors_[0]};
+    return pg_->_allgather_base(outputs_, inputs);
   }
 
   at::Tensor getOutputTensor() {
     c10::cuda::CUDAMultiStreamGuard guard(streams_);
-    return output_tensor_.cpu();
+    return outputs_[0].cpu();
   }
 
   at::Tensor getInputTensor() {
@@ -269,7 +271,7 @@ class AllgatherBaseNCCLTest : public NCCLTest {
 
 
   private:
-    at::Tensor output_tensor_;
+    std::vector<at::Tensor> outputs_;
 };
 
 

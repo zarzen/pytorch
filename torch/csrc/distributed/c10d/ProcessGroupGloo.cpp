@@ -1969,8 +1969,8 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupGloo::allgather_coalesced(
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupGloo::_allgather_base(
-    at::Tensor& /*unused */,
-    at::Tensor& /*unused */,
+    std::vector<at::Tensor>& /*unused */,
+    std::vector<at::Tensor>& /*unused */,
     const AllgatherOptions& /*unused */) {
   TORCH_CHECK(false,
       "no support for _allgather_base in Gloo process group");

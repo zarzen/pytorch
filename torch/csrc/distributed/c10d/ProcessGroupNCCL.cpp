@@ -1884,27 +1884,26 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::recvAnysource(
 }
 
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::_allgather_base(
-    at::Tensor& output_tensor,
-    at::Tensor& input_tensor,
+    std::vector<at::Tensor>& outputTensors,
+    std::vector<at::Tensor>& inputTensors,
     const AllgatherOptions& /*unused */) {
-  check_gpu_single_tensor(input_tensor);
-  check_gpu_single_tensor(output_tensor);
-
-  if (input_tensor.dtype() != output_tensor.dtype()) {
-    TORCH_CHECK(false, "output tensor must have the same type as input tensor");
+  if (inputTensors.size() != outputTensors.size()) {
+    TORCH_CHECK(false, "size of input tensors and output tensors must match");
   }
 
-  if (input_tensor.numel() * size_ != output_tensor.numel()) {
-    TORCH_CHECK(false, "output tensor size must be equal to world_size times input tensor size");
-  }
+  for (const auto i : c10::irange(inputTensors.size())) {
+    if (inputTensors[i].dtype() != outputTensors[i].dtype()) {
+      TORCH_CHECK(false, "output tensor must have the same type as input tensor");
+    }
 
-  // just a wrapper to fit the collective interface
-  auto inputs = std::vector<at::Tensor> {input_tensor};
-  auto outputs = std::vector<at::Tensor> {output_tensor};
+    if (inputTensors[i].numel() * size_ != outputTensors[i].numel()) {
+      TORCH_CHECK(false, "output tensor size must be equal to world_size times input tensor size");
+    }
+  }
 
   return collective(
-      inputs,
-      outputs,
+      inputTensors,
+      outputTensors,
       [&](at::Tensor& input,
           at::Tensor& output,
           ncclComm_t comm,

@@ -218,8 +218,8 @@ class ProcessGroup:
     ) -> Work: ...
     def _allgather_base(
         self,
-        output: Tensor,
-        input: Tensor,
+        output_tensors: List[Tensor],
+        input_tensors: List[Tensor],
         opts = AllGatherOptions(),
     ) -> Work: ...
     def allgather_coalesced(
