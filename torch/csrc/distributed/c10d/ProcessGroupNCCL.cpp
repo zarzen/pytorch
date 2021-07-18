@@ -1887,6 +1887,10 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::_allgather_base(
     std::vector<at::Tensor>& outputTensors,
     std::vector<at::Tensor>& inputTensors,
     const AllgatherOptions& /*unused */) {
+  if (inputTensors.size() == 0) {
+    TORCH_CHECK(false, "the size of input tensors must greater than 0");
+  }
+
   if (inputTensors.size() != outputTensors.size()) {
     TORCH_CHECK(false, "size of input tensors and output tensors must match");
   }
@@ -1899,29 +1903,93 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::_allgather_base(
     if (inputTensors[i].numel() * size_ != outputTensors[i].numel()) {
       TORCH_CHECK(false, "output tensor size must be equal to world_size times input tensor size");
     }
+
+    if (inputTensors[0].device().index() != inputTensors[i].device().index()) {
+      TORCH_CHECK(false, "input tensors must on the same device");
+    }
+
+    if (inputTensors[i].device().index() != outputTensors[i].device().index()) {
+      TORCH_CHECK(false, "output tensors must on the same device as input tensors");
+    }
   }
 
-  return collective(
-      inputTensors,
-      outputTensors,
-      [&](at::Tensor& input,
-          at::Tensor& output,
-          ncclComm_t comm,
-          at::cuda::CUDAStream& stream) {
-        c10::cuda::CUDACachingAllocator::recordStream(
-            output.storage().data_ptr(), stream);
-        return ncclAllGather(
-            input.data_ptr(),
-            output.data_ptr(),
-            input.numel(),
-            getNcclDataType(input.scalar_type()),
-            comm,
-            stream.stream());
-      },
-      [&](std::vector<at::cuda::CUDAStream>&) {},
-      [&](std::vector<at::cuda::CUDAStream>&) {},
-      OpType::_ALLGATHER_BASE,
-      "nccl:_all_gather_base");
+  // The following code block is borrowed from collective function
+  // but with the change on ncclAllgather launch part. 
+  // in which only one ncclComm is required, rather than create multiple for each tensor
+
+  // Bump collective counter
+  if (sequenceNum_) {
+    sequenceNum_->increment();
+  }
+  auto opType = OpType::_ALLGATHER_BASE;
+  const auto devices = getDeviceList(std::vector<at::Tensor>{inputTensors[0]});
+  // all tensors on the same device, thus use same nccl_comm
+  const auto key = getKeyFromDevices(devices);
+  auto& ncclComms = getNCCLComm(key, devices, opType);
+
+  // First let NCCL streams wait for input tensors allocation streams
+  syncStreams(devices, ncclEvents_[key], ncclStreams_[key]);
+
+  // Work itself will create the CUDA events on all GPUs of tensors
+  bool can_profile = outputTensors.size() == 1;
+
+  auto work = initWork(
+      devices,
+      rank_,
+      opType,
+      can_profile ? "nccl:_all_gather_base" : nullptr,
+      can_profile ? c10::optional<std::vector<at::Tensor>>(inputTensors)
+                  : c10::nullopt);
+
+  // Store references to outputs to be used by WorkNCCL::result and operator<<.
+  work->outputs_ = std::make_shared<std::vector<at::Tensor>>(outputTensors);
+
+  at::cuda::OptionalCUDAGuard gpuGuard;
+  at::cuda::CUDAStream& ncclStream = ncclStreams_[key][0];
+  {
+    AutoNcclGroup nccl_group_guard;
+    gpuGuard.set_index(devices[0].index());
+    for (const auto i : c10::irange(inputTensors.size())) {
+      c10::cuda::CUDACachingAllocator::recordStream(
+          inputTensors[i].storage().data_ptr(), ncclStream);
+      c10::cuda::CUDACachingAllocator::recordStream(
+          outputTensors[i].storage().data_ptr(), ncclStream);
+
+      ncclAllGather(inputTensors[i].data_ptr(), outputTensors[i].data_ptr(), 
+          inputTensors[i].numel(), getNcclDataType(inputTensors[i].scalar_type()),
+          ncclComms[0]->getNcclComm(), ncclStream);
+    }
+  }
+  // record event
+  (*work->cudaEvents_)[0].record(ncclStream);
+  work->ncclComms_[0] = ncclComms[0];
+
+  {
+    c10::cuda::CUDAMultiStreamGuard streamGuard(ncclStreams_[key]);
+    work->future_ = c10::make_intrusive<at::ivalue::Future>(
+        c10::ListType::create(c10::TensorType::get()),
+        devices);
+
+    // Add a callback that runs profiling end callbacks. wrapCallback() in CUDA
+    // future blocks the stream this callback runs on the corresponding
+    // cudaEvents_ ensuring appropriate synchronization.
+    if (work->recordFunctionEndCallback_) {
+      work->future_->addCallback(
+          [work](at::ivalue::Future& /* unused */) { work->recordFunctionEndCallback_(); });
+    }
+    work->future_->markCompleted(at::IValue(*work->outputs_));
+  }
+
+  // Set appropriate work parameters.
+  work->blockingWait_ = blockingWait_;
+  work->opTimeout_ = options_->timeout;
+  work->store_ = store_;
+
+  if (asyncErrorHandling_) {
+    workEnqueue(work);
+  }
+
+  return work;
 }
 
 } // namespace c10d

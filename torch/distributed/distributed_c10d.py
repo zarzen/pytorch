@@ -2021,8 +2021,24 @@ def _all_gather_base(output_tensors, input_tensors, group=None, async_op=False):
         is correctly sized.
 
     """
-    _check_tensor_list(input_tensors, "input_tensors")
-    _check_tensor_list(output_tensors, "output_tensors")
+    def __input_check(tensors):
+
+        if type(tensors) != list:
+            if not isinstance(tensors, torch.Tensor):
+                raise RuntimeError(
+                    "Invalid input. Inputs must be a torch.Tensor or a list of tensors"
+                    )
+            tensors = [tensors]
+
+        return tensors
+    input_tensors = __input_check(input_tensors)
+    output_tensors = __input_check(output_tensors)
+
+    if len(input_tensors) != len(output_tensors):
+        raise RuntimeError(
+            "output_tensors must has same length as input_tensors"
+        )
+    
     if _rank_not_in_group(group):
         return
 
