@@ -1983,6 +1983,8 @@ def all_gather(tensor_list, tensor, group=None, async_op=False):
     else:
         work.wait()
 
+def _all_gather_base_coalesced(output_tensors, input_tensors, group=None, async_op=False):
+    return _all_gather_base(output_tensors, input_tensors, group, async_op)
 
 def _all_gather_base(output_tensors, input_tensors, group=None, async_op=False):
     """
