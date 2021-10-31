@@ -1762,6 +1762,95 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::_reduce_scatter_base(
       "nccl:_reduce_scatter_base");
 }
 
+c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::_reduce_scatter_coalesced(
+      std::vector<at::Tensor>& outputTensors,
+      std::vector<at::Tensor>& inputTensors,
+      const ReduceScatterOptions& opts) {
+  for (auto i = 0; i < outputTensors.size(); i++) {
+    if (inputTensors[i].dtype() != outputTensors[i].dtype()) {
+      TORCH_CHECK(false, "input tensor must be the same type as the outut tensor.");
+    }
+
+    if (inputTensors[i].numel() != outputTensors[i].numel() * size_) {
+      TORCH_CHECK(false, "input tensor must be the same size as output size times world size");
+    }
+  }
+  // TODO: add RECORD_PARAM_COMMS later
+
+  // Bump collective counter
+  if (sequenceNum_) {
+    sequenceNum_->increment();
+  }
+  auto opType = OpType::_REDUCE_SCATTER_COALESCED;
+  const auto devices = getDeviceList(std::vector<at::Tensor>{inputTensors[0]});
+  // all tensors on the same device, thus use same nccl_comm
+  const auto key = getKeyFromDevices(devices);
+  auto& ncclComms = getNCCLComm(key, devices, opType);
+
+  // First let NCCL streams wait for input tensors allocation streams
+  syncStreams(devices, ncclEvents_[key], ncclStreams_[key]);
+  // Work itself will create the CUDA events on all GPUs of tensors
+  bool can_profile = outputTensors.size() == 1;
+  auto work = initWork(
+      devices,
+      rank_,
+      opType,
+      can_profile ? "nccl:_reduce_scatter_coalesced" : nullptr,
+      can_profile ? c10::optional<std::vector<at::Tensor>>(inputTensors)
+                  : c10::nullopt);
+  
+  // Store references to outputs to be used by WorkNCCL::result and operator<<.
+  work->outputs_ = std::make_shared<std::vector<at::Tensor>>(outputTensors);
+
+  at::cuda::OptionalCUDAGuard gpuGuard;
+  at::cuda::CUDAStream& ncclStream = ncclStreams_[key][0];
+  {
+    AutoNcclGroup nccl_group_guard;
+    gpuGuard.set_index(devices[0].index());
+    for (const auto i : c10::irange(inputTensors.size())) {
+      c10::cuda::CUDACachingAllocator::recordStream(
+          inputTensors[i].storage().data_ptr(), ncclStream);
+      c10::cuda::CUDACachingAllocator::recordStream(
+          outputTensors[i].storage().data_ptr(), ncclStream);
+      
+      ncclReduceScatter(inputTensors[i].data_ptr(), outputTensors[i].data_ptr(), 
+          inputTensors[i].numel(), getNcclDataType(inputTensors[i].scalar_type()),
+          getNcclReduceOp(opts.reduceOp, inputTensors[i]),
+          ncclComms[0]->getNcclComm(), ncclStream.stream());
+    }
+  }
+  // record event
+  (*work->cudaEvents_)[0].record(ncclStream);
+  work->ncclComms_[0] = ncclComms[0]; 
+
+  {
+    c10::cuda::CUDAMultiStreamGuard streamGuard(ncclStreams_[key]);
+    work->future_ = c10::make_intrusive<at::ivalue::Future>(
+        c10::ListType::create(c10::TensorType::get()),
+        devices);
+
+    // Add a callback that runs profiling end callbacks. wrapCallback() in CUDA
+    // future blocks the stream this callback runs on the corresponding
+    // cudaEvents_ ensuring appropriate synchronization.
+    if (work->recordFunctionEndCallback_) {
+      work->future_->addCallback(
+          [work](at::ivalue::Future& /* unused */) { work->recordFunctionEndCallback_(); });
+    }
+    work->future_->markCompleted(at::IValue(*work->outputs_));
+  }
+
+  // Set appropriate work parameters.
+  work->blockingWait_ = blockingWait_;
+  work->opTimeout_ = options_->timeout;
+  work->store_ = store_;
+
+  if (asyncErrorHandling_) {
+    workEnqueue(work);
+  }
+
+  return work;
+}
+
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::barrier(
     const BarrierOptions& opts) {
   RECORD_PARAM_COMMS(
@@ -2126,7 +2215,7 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::_allgather_base(
 
       ncclAllGather(inputTensors[i].data_ptr(), outputTensors[i].data_ptr(), 
           inputTensors[i].numel(), getNcclDataType(inputTensors[i].scalar_type()),
-          ncclComms[0]->getNcclComm(), ncclStream);
+          ncclComms[0]->getNcclComm(), ncclStream.stream());
     }
   }
   // record event

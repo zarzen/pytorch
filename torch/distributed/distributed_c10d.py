@@ -2457,6 +2457,46 @@ def _reduce_scatter_base(output, input, op=ReduceOp.SUM, group=None, async_op=Fa
         work.wait()
 
 
+def _reduce_scatter_coalesced(output_tensors, input_tensors, op=ReduceOp.SUM, group=None, async_op=False):
+    """
+    """
+    if len(input_tensors) != len(output_tensors):
+        raise RuntimeError(
+            "output_tensors must has same length as input_tensors"
+        ) 
+    if _rank_not_in_group(group):
+        return
+    
+    output_tensors = [
+        output_ 
+        if not output_.is_complex()
+        else torch.view_as_real(output_)
+        for output_ in output_tensors
+    ]
+    input_tensors = [
+        input_ 
+        if not input_.is_complex() 
+        else torch.view_as_real(input_) 
+        for input_ in input_tensors
+    ]
+
+    opts = ReduceScatterOptions()
+    opts.reduceOp = op
+    if group is None:
+        default_pg = _get_default_group()
+        work = default_pg._reduce_scatter_coalesced(output_tensors,
+                                                    input_tensors,
+                                                    opts)
+    else:
+        work = group._reduce_scatter_coalesced(output_tensors,
+                                               input_tensors,
+                                               opts)
+
+    if async_op:
+        return work
+    else:
+        work.wait()
+
 def all_to_all_single(
     output,
     input,

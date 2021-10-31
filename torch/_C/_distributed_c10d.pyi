@@ -278,6 +278,13 @@ class ProcessGroup:
         inputTensor: Tensor,
     ) -> Work: ...
     @overload
+    def _reduce_scatter_coalesced(
+        self,
+        outputTensors: List[Tensor],
+        inputTensors: List[Tensor],
+        opts=ReduceScatterOptions(),
+    ) -> Work: ...
+    @overload
     def alltoall_base(
         self,
         output_tensor: Tensor,

@@ -47,6 +47,7 @@ enum class OpType : std::uint8_t {
   RECVANYSOURCE = 14,
   BARRIER = 15,
   _REDUCE_SCATTER_BASE = 16,
+  _REDUCE_SCATTER_COALESCED = 17,
   UNKNOWN = 100,
 };
 
@@ -326,6 +327,18 @@ class TORCH_API ProcessGroup : public torch::CustomClassHolder {
             "ProcessGroup ",
             getBackendName(),
             "does not support _reduce_scatter_base"));
+  }
+
+  virtual c10::intrusive_ptr<ProcessGroup::Work> _reduce_scatter_coalesced(
+      std::vector<at::Tensor>&  /* output buffers */,
+      std::vector<at::Tensor>&  /* input buffers */,
+      const ReduceScatterOptions& /* opts */ = ReduceScatterOptions()) {
+    TORCH_CHECK(
+        false,
+        c10::str(
+            "ProcessGroup ",
+            getBackendName(),
+            "does not support _reduce_scatter_coalesced"));
   }
 
   virtual c10::intrusive_ptr<ProcessGroup::Work> alltoall_base(
