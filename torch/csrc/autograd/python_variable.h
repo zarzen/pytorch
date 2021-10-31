@@ -18,13 +18,13 @@ struct THPVariable {
   PyObject* backward_hooks = nullptr;
 };
 
-// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+TORCH_API void registerPythonTensorClass(const std::string& device, PyObject* python_tensor_class);
+
 THP_API PyObject *THPVariableClass;
-// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 THP_API PyObject *ParameterClass;
 
 bool THPVariable_initModule(PyObject *module);
-THP_API PyObject * THPVariable_Wrap(torch::autograd::Variable var);
+THP_API PyObject * THPVariable_Wrap(at::TensorBase var);
 
 static inline bool THPVariable_CheckTypeExact(PyTypeObject* tp) {
   // Check that a python object is a `Tensor`, but not a `Tensor` subclass.
@@ -53,3 +53,5 @@ inline const at::Tensor& THPVariable_Unpack(THPVariable* var) {
 inline const at::Tensor& THPVariable_Unpack(PyObject* obj) {
   return THPVariable_Unpack(reinterpret_cast<THPVariable*>(obj));
 }
+
+THP_API c10::impl::PyInterpreter* getPyInterpreter();

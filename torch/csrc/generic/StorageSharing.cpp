@@ -6,7 +6,8 @@
 
 #include <torch/csrc/utils/python_numbers.h>
 #include <ATen/MapAllocator.h>
-#include <random>
+#include <atomic>
+#include <string>
 
 static PyObject * THPStorage_(sharedDecref)(PyObject *_self, PyObject *noargs)
 {
@@ -40,24 +41,11 @@ static PyObject * THPStorage_(sharedIncref)(PyObject *_self, PyObject *noargs)
 }
 
 #ifndef THC_GENERIC_FILE
-// TODO: move this somewhere - we only need one version
-static std::string THPStorage_(__newHandle)() {
-  static std::random_device rd;
-  std::string handle = "/torch_";
-#ifdef _MSC_VER
-  handle += std::to_string(GetCurrentProcessId());
-#else
-  handle += std::to_string(getpid());
-#endif
-  handle += "_";
-  handle += std::to_string(rd());
-  return handle;
-}
 
 static THWStorage* THPStorage_(newFilenameStorage)(ptrdiff_t size)
 {
   int flags = at::ALLOCATOR_MAPPED_SHAREDMEM | at::ALLOCATOR_MAPPED_EXCLUSIVE;
-  std::string handle = THPStorage_(__newHandle)();
+  std::string handle = at::NewProcessWideShmHandle();
   return THWStorage_(newWithDataAndAllocator)(
       THManagedMapAllocator::makeDataPtr("", handle.c_str(), flags, size * sizeof(scalar_t)), size, /* allocator */ nullptr);
 }
@@ -142,7 +130,7 @@ static THWStorage* THPStorage_(newFdStorage)(ptrdiff_t size)
               at::ALLOCATOR_MAPPED_EXCLUSIVE |
               at::ALLOCATOR_MAPPED_KEEPFD |
               at::ALLOCATOR_MAPPED_UNLINK;
-  std::string handle = THPStorage_(__newHandle)();
+  std::string handle = at::NewProcessWideShmHandle();
   auto sptr = at::MapAllocator::makeDataPtr(handle.c_str(), flags, size * sizeof(scalar_t), nullptr);
   return THWStorage_(newWithDataAndAllocator)(std::move(sptr), size, /* allocator */ nullptr);
 }
@@ -258,7 +246,7 @@ static PyObject * THPStorage_(shareCuda)(PyObject *_self, PyObject *noargs)
 
     // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
     cudaIpcMemHandle_t handle;
-    THCudaCheck(cudaIpcGetMemHandle(&handle, base_ptr));
+    C10_CUDA_CHECK(cudaIpcGetMemHandle(&handle, base_ptr));
 
     _handle = PyBytes_FromStringAndSize((char *)&handle, CUDA_IPC_HANDLE_SIZE);
     _offset_bytes = PyLong_FromSsize_t((Py_ssize_t)offset_bytes);
@@ -275,9 +263,9 @@ static PyObject * THPStorage_(shareCuda)(PyObject *_self, PyObject *noargs)
     // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
     cudaIpcEventHandle_t ipc_event_handle;
 
-#ifndef __HIP_PLATFORM_HCC__
+#if !defined(USE_ROCM)
     if (sent_data->event_sync_required_) {
-      THCudaCheck(cudaIpcGetEventHandle(&ipc_event_handle, sent_data->event_));
+      C10_CUDA_CHECK(cudaIpcGetEventHandle(&ipc_event_handle, sent_data->event_));
     }
 #else
     // ipc_event_handle unused in storage receiver, we can leave it uninitialized.
@@ -393,7 +381,7 @@ static PyObject * THPStorage_(newSharedCuda)(PyObject *_unused, PyObject *args)
   int64_t device = THPUtils_unpackLong(_device);
   at::cuda::CUDAGuard device_guard(device);
 
-#ifndef __HIP_PLATFORM_HCC__
+#if !defined(USE_ROCM)
   if (PyObject_IsTrue(_event_sync_required)) {
     // Ensure that producer prepared all tensor's data
     std::string s_ipc_event_handle =
@@ -422,10 +410,27 @@ static PyObject * THPStorage_(newSharedCuda)(PyObject *_unused, PyObject *args)
   std::string ref_counter_handle = PyBytes_AS_STRING(_ref_counter);
   ptrdiff_t ref_counter_offset = (ptrdiff_t)THPUtils_unpackLong(_ref_counter_offset);
 
-  auto c = new torch::CudaIPCReceivedData(std::move(basePtr));
-  auto sp = std::shared_ptr<void>(
-      (void*)c, [ref_counter_handle, ref_counter_offset, device](void* ptr) {
-        delete static_cast<torch::CudaIPCReceivedData*>(ptr);
+  struct IpcDeleterContext {
+    std::string ref_counter_handle;
+    ptrdiff_t ref_counter_offset;
+    int64_t device;
+    torch::CudaIPCReceivedData received_data;
+  };
+
+  auto ctx = std::make_unique<IpcDeleterContext>();
+  ctx->ref_counter_handle = std::move(ref_counter_handle);
+  ctx->ref_counter_offset = ref_counter_offset;
+  ctx->device = device;
+  ctx->received_data.shared_ptr_ = std::move(basePtr);
+
+  auto cur_device = at::cuda::current_device();
+  c10::DataPtr data_ptr(
+      devPtr,
+      ctx.release(),
+      +[](void *ctx_) {
+        std::unique_ptr<IpcDeleterContext> ctx(static_cast<IpcDeleterContext*>(ctx_));
+        ctx->received_data.shared_ptr_.reset();
+
         // Sync default stream to make sure all operations related to the storage is
         // finished (otherwise another process may reuse memory and corrupt
         // data)
@@ -438,7 +443,7 @@ static PyObject * THPStorage_(newSharedCuda)(PyObject *_unused, PyObject *args)
 
         // TODO: Instead of cudaStreamSynchronize it is possible to add Stream
         // Callback and release counter inside of it (need to check performance impact)
-        cudaStreamSynchronize(c10::cuda::getCurrentCUDAStream(device));
+        at::cuda::stream_synchronize(c10::cuda::getCurrentCUDAStream(ctx->device));
 
         // We don't want to break existing code, so resource deletion is best
         // effort basis. Exception expected if producer process terminated
@@ -447,19 +452,20 @@ static PyObject * THPStorage_(newSharedCuda)(PyObject *_unused, PyObject *args)
             at::ALLOCATOR_MAPPED_SHAREDMEM | at::ALLOCATOR_MAPPED_NOCREATE;
         try {
           auto sptr = at::RefcountedMapAllocator::makeDataPtr(
-              ref_counter_handle.c_str(),
+              ctx->ref_counter_handle.c_str(),
               flags,
               sizeof(int64_t) * torch::CUDA_IPC_REF_COUNTER_FILE_SIZE,
               nullptr);
-          *(static_cast<int64_t*>(sptr.get()) + ref_counter_offset) -= 1;
+          *(static_cast<int64_t*>(sptr.get()) + ctx->ref_counter_offset) -= 1;
         } catch (c10::Error& err) {
           // Already warned inside of producer process
         }
-      });
+      },
+      at::Device(at::DeviceType::CUDA, cur_device));
 
   THWStoragePtr base(THWStorage_(newWithDataAndAllocator)(
       LIBRARY_STATE
-      THCIpcDeleter::makeDataPtr(std::move(sp), devPtr),
+      std::move(data_ptr),
       storage_size, /* allocator */ nullptr));
   base->set_resizable(false);
   base->set_received_cuda(true);

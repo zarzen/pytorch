@@ -6,7 +6,8 @@ install_magma() {
     # "install" hipMAGMA into /opt/rocm/magma by copying after build
     git clone https://bitbucket.org/icl/magma.git
     pushd magma
-    git checkout aed4e285084763113ce5757393d4008e27b5194b
+    # fix for Cholesky issue
+    git checkout 092253401778a2cd35a214b0436efacebe2e55cd
     cp make.inc-examples/make.inc.hip-gcc-mkl make.inc
     echo 'LIBDIR += -L$(MKLROOT)/lib' >> make.inc
     echo 'LIB += -Wl,--enable-new-dtags -Wl,--rpath,/opt/rocm/lib -Wl,--rpath,$(MKLROOT)/lib -Wl,--rpath,/opt/rocm/magma/lib' >> make.inc
@@ -29,6 +30,10 @@ install_ubuntu() {
     apt-get update
     if [[ $UBUNTU_VERSION == 18.04 ]]; then
       # gpg-agent is not available by default on 18.04
+      apt-get install -y --no-install-recommends gpg-agent
+    fi
+    if [[ $UBUNTU_VERSION == 20.04 ]]; then
+      # gpg-agent is not available by default on 20.04
       apt-get install -y --no-install-recommends gpg-agent
     fi
     apt-get install -y kmod

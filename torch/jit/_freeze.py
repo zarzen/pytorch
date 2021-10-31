@@ -84,6 +84,10 @@ def freeze(mod, preserved_attrs: Optional[List[str]] = None, optimize_numerics: 
         assert frozen_module(torch.tensor(1)) == torch.tensor(13)
 
     Note:
+        Freezing submodule attributes is also supported:
+        frozen_module = torch.jit.freeze(scripted_module, preserved_attrs=["submodule.version"])
+
+    Note:
         If you're not sure why an attribute is not being inlined as a constant, you can run
         `dump_alias_db` on frozen_module.forward.graph to see if freezing has detected the
         attribute is being modified.
@@ -179,6 +183,18 @@ def optimize_for_inference(mod: ScriptModule) -> ScriptModule:
     This is still in prototype, and may have the potential to slow down your model.
     Primary use cases that have been targeted so far have been vision models on cpu
     and gpu to a lesser extent.
+
+    Example (optimizing a module with Conv->Batchnorm)::
+
+        import torch
+        in_channels, out_channels = 3, 32
+        conv = torch.nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=2, bias=True)
+        bn = torch.nn.BatchNorm2d(out_channels, eps=.001)
+        mod = torch.nn.Sequential(conv, bn)
+        frozen_mod = torch.jit.optimize_for_inference(torch.jit.script(mod.eval()))
+        assert "batch_norm" not in str(frozen_mod.graph)
+        # if built with MKLDNN, convolution will be run with MKLDNN weights
+        assert "MKLDNN" in frozen_mod.graph
     """
     if not isinstance(mod, ScriptModule):
         raise RuntimeError(

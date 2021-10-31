@@ -4,14 +4,13 @@
 #include <ATen/Dispatch.h>
 #include <ATen/native/DispatchStub.h>
 #include <ATen/native/TensorIterator.h>
+#include <c10/util/irange.h>
 #include <cmath>
 #include <limits>
 
 namespace at { namespace native {
 
-// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 DECLARE_DISPATCH(void(*)(TensorIterator&, const Scalar&, const Scalar&, const Scalar&), arange_stub);
-// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 DECLARE_DISPATCH(void(*)(TensorIterator&, const Scalar&, const Scalar&, int64_t), linspace_stub);
 
 Tensor& linspace_cpu_out(const Scalar& start, const Scalar& end, c10::optional<int64_t> optional_steps, Tensor& result) {
@@ -97,7 +96,7 @@ Tensor& logspace_cpu_out(const Scalar& start, const Scalar& end, c10::optional<i
       double step = static_cast<double>(scalar_end - scalar_start) / (steps - 1);
       const int64_t halfway = steps / 2;
       at::parallel_for(0, steps, internal::GRAIN_SIZE, [&](int64_t p_begin, int64_t p_end) {
-        for (int64_t i=p_begin; i < p_end; i++) {
+        for (const auto i : c10::irange(p_begin, p_end)) {
           if (i < halfway) {
             data_ptr[i] = std::pow(scalar_base, scalar_start + step*i);
           } else {
@@ -115,7 +114,7 @@ Tensor& logspace_cpu_out(const Scalar& start, const Scalar& end, c10::optional<i
 }
 
 Tensor& range_cpu_out(const Scalar& start, const Scalar& end, const Scalar& step, Tensor& result) {
-  AT_DISPATCH_ALL_TYPES(result.scalar_type(), "range_cpu", [&]() {
+  AT_DISPATCH_ALL_TYPES_AND(kBFloat16, result.scalar_type(), "range_cpu", [&]() {
     using accscalar_t = at::acc_type<scalar_t, false>;
     auto xstart = start.to<accscalar_t>();
     auto xend = end.to<accscalar_t>();
@@ -135,7 +134,7 @@ Tensor& range_cpu_out(const Scalar& start, const Scalar& end, const Scalar& step
     scalar_t *data_ptr = r.data_ptr<scalar_t>();
 
     at::parallel_for(0, size, internal::GRAIN_SIZE, [&](int64_t p_begin, int64_t p_end) {
-      scalar_t is = p_begin;
+      accscalar_t is = p_begin;
       for (int64_t i = p_begin; i < p_end; ++i, ++is) {
         data_ptr[i] = xstart + is * xstep;
       }
@@ -149,7 +148,7 @@ Tensor& range_cpu_out(const Scalar& start, const Scalar& end, const Scalar& step
 }
 
 Tensor& arange_cpu_out(const Scalar& start, const Scalar& end, const Scalar& step, Tensor& result) {
-  AT_DISPATCH_ALL_TYPES(result.scalar_type(), "arange_cpu", [&]() {
+  AT_DISPATCH_ALL_TYPES_AND(kBFloat16, result.scalar_type(), "arange_cpu", [&]() {
     using accscalar_t = at::acc_type<scalar_t, false>;
     auto xstart = start.to<accscalar_t>();
     auto xend = end.to<accscalar_t>();
@@ -206,9 +205,7 @@ Tensor& arange_cpu_out(const Scalar& start, const Scalar& end, const Scalar& ste
   return result;
 }
 
-// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 DEFINE_DISPATCH(arange_stub);
-// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 DEFINE_DISPATCH(linspace_stub);
 
 }} // namespace at::native

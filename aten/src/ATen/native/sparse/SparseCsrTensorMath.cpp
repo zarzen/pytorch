@@ -15,6 +15,52 @@
 #include <algorithm>
 
 namespace at {
+namespace meta {
+
+TORCH_META_FUNC(_convert_indices_from_coo_to_csr) (
+  const Tensor& self, const int64_t size, const bool out_int32
+) {
+  TORCH_CHECK(self.dim() <= 1, "Input is supposed to be a vector");
+  ScalarType scalar_type = out_int32 ? ScalarType::Int : ScalarType::Long;
+  c10::TensorOptions options = TensorOptions().device(self.options().device()).dtype(scalar_type);
+  set_output(size + 1, options);
+}
+
+} // namespace meta
+
+namespace {
+
+constexpr int64_t GRAIN_SIZE = at::internal::GRAIN_SIZE;
+
+template <typename input_t, typename output_t>
+void convert_indices_from_coo_to_csr_cpu(const Tensor& result, const Tensor& input, const int64_t size) {
+  int64_t numel = input.numel();
+  const input_t* data_in = input.data_ptr<input_t>();
+  output_t* data_out = result.data_ptr<output_t>();
+
+  if (numel == 0) {
+    result.zero_();
+    return;
+  }
+
+  for (int64_t i = 0; i <= data_in[0]; i++)
+    data_out[i] = static_cast<output_t>(0);
+
+  at::parallel_for(0, numel - 1, GRAIN_SIZE, [&](int64_t start, int64_t end) {
+    input_t curr_value = data_in[start], next_value;
+    for (int64_t i = start; i < end; i++) {
+      next_value = data_in[i + 1];
+      for (; curr_value < next_value; curr_value++)
+        data_out[curr_value + 1] = static_cast<output_t>(i + 1);
+    }
+  });
+
+  for (int64_t i = data_in[numel - 1] + 1; i < size + 1; i++)
+    data_out[i] = static_cast<output_t>(numel);
+}
+
+} // end anonymous namespace
+
 namespace native {
 
 using namespace at::sparse_csr;
@@ -176,17 +222,36 @@ Tensor addmm_sparse_csr_dense(
     const Tensor& dense,
     const Scalar& beta,
     const Scalar& alpha) {
-  Tensor r = at::empty({0}, self.options());
+  Tensor r = at::empty({0, 0}, self.options());
   at::addmm_out(r, self, sparse, dense, beta, alpha);
   return r;
 }
 
-SparseCsrTensor& _sparse_csr_mm_out(
-    const SparseCsrTensor& sparse,
-    const Tensor& dense,
-    SparseCsrTensor& result) {
-  Tensor t = at::zeros({}, dense.options());
-  return at::addmm_out(result, t, sparse, dense, 0.0, 1.0); // redispatch!
+Tensor& _sparse_csr_mm_out(
+    const Tensor& mat1,
+    const Tensor& mat2,
+    Tensor& result) {
+  Tensor zero;
+  if (result.is_sparse_csr()) {
+    // TODO: replace with at::zeros when it's implemented for sparse csr
+    zero = at::empty({mat1.size(0), mat2.size(1)}, mat2.options());
+  } else {
+    zero = at::zeros({mat1.size(0), mat2.size(1)}, mat2.options());
+  }
+  return at::addmm_out(result, zero, mat1, mat2, 0.0, 1.0);
+}
+
+Tensor _sparse_csr_mm(
+    const Tensor& mat1,
+    const Tensor& mat2) {
+  Tensor zero;
+  if (mat1.is_sparse_csr() && mat2.is_sparse_csr()) {
+    // TODO: replace with at::zeros when it's implemented for sparse csr
+    zero = at::empty({mat1.size(0), mat2.size(1)}, mat2.options());
+  } else {
+    zero = at::zeros({mat1.size(0), mat2.size(1)}, mat2.options());
+  }
+  return at::addmm(zero, mat1, mat2, 0.0, 1.0);
 }
 
 Tensor _sparse_csr_addmm(
@@ -205,7 +270,7 @@ Tensor _sparse_csr_addmm(
 Tensor add_sparse_csr(const Tensor& self, const Tensor& other, const Scalar& alpha) {
   auto commonDtype = at::result_type(self, other);
   alpha_check(commonDtype, alpha);
-  Tensor result = at::empty({0}, self.options().dtype(commonDtype));
+  Tensor result = at::empty({0, 0}, self.options().dtype(commonDtype));
   return at::add_out(result, self, other, alpha); // redispatch!
 }
 
@@ -320,6 +385,20 @@ Tensor& add_out_sparse_csr_cpu(
         "NotImplementedError: Addition of sparse CSR tensors is not yet implemented.")
   }
   return out;
+}
+
+TORCH_IMPL_FUNC(_convert_indices_from_coo_to_csr_structured_cpu) (
+  const Tensor& input, const int64_t size, const bool out_int32, const Tensor& result
+) {
+  if (out_int32) {
+    AT_DISPATCH_INTEGRAL_TYPES(input.scalar_type(), "convert_indices_from_coo_to_csr_cpu", [&] {
+      convert_indices_from_coo_to_csr_cpu<scalar_t, int>(result, input, size);
+    });
+  } else {
+    AT_DISPATCH_INTEGRAL_TYPES(input.scalar_type(), "convert_indices_from_coo_to_csr_cpu", [&] {
+      convert_indices_from_coo_to_csr_cpu<scalar_t, int64_t>(result, input, size);
+    });
+  }
 }
 
 } // namespace native
