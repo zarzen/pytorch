@@ -260,7 +260,14 @@ class TORCH_API ProcessGroup : public torch::CustomClassHolder {
   virtual c10::intrusive_ptr<ProcessGroup::Work> _allgather_base(
       std::vector<at::Tensor>& outputTensors,
       std::vector<at::Tensor>& inputTensors,
-      const AllgatherOptions& opts = AllgatherOptions()) = 0;
+      const AllgatherOptions& opts = AllgatherOptions()) {
+    TORCH_CHECK(
+        false,
+        c10::str(
+            "ProcessGroup ",
+            getBackendName(),
+            "does not support _allgather_base"));
+  }
 
   // This function is deprecated and will be moved out of ProcessGroup to comms:
   // * do not add dependencies on this function,
