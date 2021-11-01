@@ -2460,6 +2460,10 @@ def _reduce_scatter_base(output, input, op=ReduceOp.SUM, group=None, async_op=Fa
 def _reduce_scatter_coalesced(output_tensors, input_tensors, op=ReduceOp.SUM, group=None, async_op=False):
     """
     """
+    if len(input_tensors) == 0 or len(output_tensors) == 0:
+        raise RuntimeError(
+            "must have some tensors in output and input"
+        )
     if len(input_tensors) != len(output_tensors):
         raise RuntimeError(
             "output_tensors must has same length as input_tensors"

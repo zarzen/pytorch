@@ -1814,7 +1814,7 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::_reduce_scatter_coalesc
           outputTensors[i].storage().data_ptr(), ncclStream);
       
       ncclReduceScatter(inputTensors[i].data_ptr(), outputTensors[i].data_ptr(), 
-          inputTensors[i].numel(), getNcclDataType(inputTensors[i].scalar_type()),
+          outputTensors[i].numel(), getNcclDataType(inputTensors[i].scalar_type()),
           getNcclReduceOp(opts.reduceOp, inputTensors[i]),
           ncclComms[0]->getNcclComm(), ncclStream.stream());
     }
