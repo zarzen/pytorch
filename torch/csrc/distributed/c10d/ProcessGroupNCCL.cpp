@@ -1766,6 +1766,8 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::_reduce_scatter_coalesc
       std::vector<at::Tensor>& outputTensors,
       std::vector<at::Tensor>& inputTensors,
       const ReduceScatterOptions& opts) {
+  int64_t outSize = 0;
+  int64_t inSize = 0;
   for (auto i = 0; i < outputTensors.size(); i++) {
     if (inputTensors[i].dtype() != outputTensors[i].dtype()) {
       TORCH_CHECK(false, "input tensor must be the same type as the outut tensor.");
@@ -1774,8 +1776,18 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::_reduce_scatter_coalesc
     if (inputTensors[i].numel() != outputTensors[i].numel() * size_) {
       TORCH_CHECK(false, "input tensor must be the same size as output size times world size");
     }
+    outSize += outputTensors[i].numel();
+    inSize += inputTensors[i].numel();
   }
-  // TODO: add RECORD_PARAM_COMMS later
+
+  RECORD_PARAM_COMMS(
+      rank_, // rank
+      "_reduce_scatter_coalesced", // colName
+      inSize, // inSize
+      outSize, // outSize
+      outputTensors[0].scalar_type(), // dtype
+      std::vector<int64_t>(), // inSplitSizes
+      std::vector<int64_t>()); // outSplitSizes
 
   // Bump collective counter
   if (sequenceNum_) {
