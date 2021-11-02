@@ -518,7 +518,7 @@ ProcessGroupNCCL::ProcessGroupNCCL(
   // collective.
   // Run it in a separate thread and wait on CV to handle timeouts, since
   // majority of getNCCLComm failures are hangs.
-  runHealthCheck();
+  // runHealthCheck();
 
 #ifdef ENABLE_NCCL_ERROR_CHECKING
   ncclCommWatchdogThread_ =
