@@ -10,6 +10,10 @@
 
 #include <c10/macros/Macros.h>
 
+#if CUB_SUPPORTS_UNIQUE_BY_KEY()
+#include <thrust/iterator/counting_iterator.h>
+#endif
+
 namespace at {
 namespace native {
 
@@ -175,8 +179,10 @@ __global__ void sum_and_scatter(
 
 } // anon namespace
 
+#if !CUB_SUPPORTS_UNIQUE_BY_KEY()
 template<typename index_t>
 int64_t embedding_backward_cuda_kernel_unique_by_key(const Tensor &sorted_indices, Tensor &segment_offsets);
+#endif
 
 Tensor embedding_backward_cuda_kernel(
         const Tensor &grad,
@@ -200,10 +206,24 @@ Tensor embedding_backward_cuda_kernel(
   // spawn a warp per index. In this context, a segment is a number of rows that should
   // be summarized.
   // Unit: index in `sorted_indices` and `orig_indices`
+  auto segment_offsets = at::empty({numel}, orig_indices.options());
+  int64_t num_of_segments;
+#if !CUB_SUPPORTS_UNIQUE_BY_KEY()
   AT_DISPATCH_INDEX_TYPES(orig_indices.scalar_type(), "embedding_backward_cuda_kernel", [&] () {
-    auto segment_offsets = at::empty({numel}, orig_indices.options());
-    int64_t num_of_segments = embedding_backward_cuda_kernel_unique_by_key<index_t>(sorted_indices, segment_offsets);
+    num_of_segments = embedding_backward_cuda_kernel_unique_by_key<index_t>(sorted_indices, segment_offsets);
+  });
+#else
+  AT_DISPATCH_INDEX_TYPES(orig_indices.scalar_type(), "embedding_backward_cuda_kernel", [&] () {
+    auto num_of_segments_tensor = at::empty({}, grad.options().dtype(kLong));
+    cuda::cub::unique_by_key(
+      sorted_indices.data_ptr<index_t>(), thrust::make_counting_iterator(0),
+      nullptr, segment_offsets.data_ptr<index_t>(),
+      num_of_segments_tensor.data_ptr<int64_t>(), sorted_indices.numel());
+    num_of_segments = num_of_segments_tensor.item<int64_t>();
+  });
+#endif
 
+  AT_DISPATCH_INDEX_TYPES(orig_indices.scalar_type(), "embedding_backward_cuda_kernel", [&] () {
     // We split the segments up into sizes of `NROWS_PER_THREAD`
     // Compute the number partial-segments per segment (some partial-segments
     // may not be the full `NROWS_PER_THREAD` number of rows)
@@ -222,12 +242,10 @@ Tensor embedding_backward_cuda_kernel(
     // start position of each _segment_ in `partial_segment_offset`.
     // Unit: index in `partial_segment_offset`
     auto partials_per_segment_offset = at::empty({num_of_segments}, orig_indices.options());
-    cuda::cub::exclusive_scan(
-      partials_per_segment.data_ptr<index_t>(),
-      partials_per_segment_offset.data_ptr<index_t>(),
-      cub::Sum(),
-      index_t(0),
-      num_of_segments);
+    cuda::cub::exclusive_sum(
+        partials_per_segment.data_ptr<index_t>(),
+        partials_per_segment_offset.data_ptr<index_t>(),
+        num_of_segments);
 
     // The total number of partial-segments is the sum of `partials_per_segment_offset`
     const int num_of_partial_segments = partials_per_segment[num_of_segments-1].item<index_t>() +
@@ -246,7 +264,8 @@ Tensor embedding_backward_cuda_kernel(
       C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
 
-    const int stride_warped = ceil_div(stride, C10_WARP_SIZE)*C10_WARP_SIZE;
+    const int warp_size = at::cuda::warp_size();
+    const int stride_warped = ceil_div(stride, warp_size)*warp_size;
     const int block = std::min(stride_warped, MAX_BLOCK_SIZE);
     const int grid = ceil_div(num_of_partial_segments*stride_warped, block);
 

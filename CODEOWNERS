@@ -12,7 +12,6 @@
 /torch/optim/ @albanD
 /test/test_public_bindings.py @albanD
 /docs/source/conf.py @albanD
-/aten/src/ATen/native/native_functions.yaml @ezyang
 
 # Tensorpipe RPC Agent.
 /torch/csrc/distributed/rpc/tensorpipe_agent.cpp @jiayisuse @osalpekar @lw @beauby
@@ -32,11 +31,11 @@
 /torch/testing/_internal/distributed @mrshenli @pritamdamania87 @zhaojuanmao @rohan-varma @H-Huang @bowangbj
 
 # ONNX Export
-/torch/csrc/jit/passes/onnx.h @bowenbao @neginraoof @shubhambhokare1
-/torch/csrc/jit/passes/onnx.cpp @bowenbao @neginraoof @shubhambhokare1
-/torch/csrc/jit/passes/onnx/ @bowenbao @neginraoof @shubhambhokare1
-/torch/onnx/ @bowenbao @neginraoof @shubhambhokare1
-/test/onnx/ @bowenbao @neginraoof @shubhambhokare1
+/torch/csrc/jit/passes/onnx.h @bowenbao @shubhambhokare1
+/torch/csrc/jit/passes/onnx.cpp @bowenbao @shubhambhokare1
+/torch/csrc/jit/passes/onnx/ @bowenbao @shubhambhokare1
+/torch/onnx/ @bowenbao @shubhambhokare1
+/test/onnx/ @bowenbao @shubhambhokare1
 
 # Docker
 /.circleci/docker/ @jeffdaily @jithunnair-amd
@@ -44,7 +43,12 @@
 # Github Actions
 # This list is for people wanting to be notified every time there's a change
 # related to Github Actions
-/.github/ @seemethere @janeyx99 @zhouzhuojie @driazati
+/.github/ @seemethere @janeyx99 @atalman
+
+# Custom Test Infrastructure
+/test/run_test.py @pytorch-dev-infra
+/torch/testing/_internal/common_device_type.py @mruberry
+/torch/testing/_internal/common_utils.py @pytorch-dev-infra
 
 # Parametrizations
 /torch/nn/utils/parametriz*.py @lezcano
