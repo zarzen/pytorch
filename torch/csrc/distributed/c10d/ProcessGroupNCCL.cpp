@@ -1967,18 +1967,21 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::_reduce_scatter_coalesc
       std::vector<int64_t>(), // inSplitSizes
       std::vector<int64_t>()); // outSplitSizes
 
+  errorIfCapturingNonCapturableNCCL();
+
   // Bump collective counter
-  if (sequenceNum_) {
-    sequenceNum_->increment();
-  }
+  seq_++;
+
   auto opType = OpType::_REDUCE_SCATTER_COALESCED;
   const auto devices = getDeviceList(std::vector<at::Tensor>{inputTensors[0]});
   // all tensors on the same device, thus use same nccl_comm
   const auto key = getKeyFromDevices(devices);
   auto& ncclComms = getNCCLComm(key, devices, opType);
+  // Used many times below, so we stash the unordered_map lookup
+  auto& ncclStreams = ncclStreams_[key];
 
   // First let NCCL streams wait for input tensors allocation streams
-  syncStreams(devices, ncclEvents_[key], ncclStreams_[key]);
+  syncStreams(devices, ncclEvents_[key], ncclStreams);
   // Work itself will create the CUDA events on all GPUs of tensors
   bool can_profile = outputTensors.size() == 1;
   auto work = initWork(
@@ -1993,6 +1996,13 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::_reduce_scatter_coalesc
   work->outputs_ = std::make_shared<std::vector<at::Tensor>>(outputTensors);
 
   at::cuda::OptionalCUDAGuard gpuGuard;
+  // Start event should only be recorded before the ncclGroupStart()
+  if (desyncDebug_) {
+    for (const auto i : c10::irange(devices.size())) {
+      at::cuda::CUDAStream& ncclStream = ncclStreams[i];
+      (*work->ncclStartEvents_)[i].record(ncclStream);
+    }
+  }
   at::cuda::CUDAStream& ncclStream = ncclStreams_[key][0];
   {
     AutoNcclGroup nccl_group_guard;
@@ -2010,7 +2020,7 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::_reduce_scatter_coalesc
     }
   }
   // record event
-  (*work->cudaEvents_)[0].record(ncclStream);
+  (*work->ncclEndEvents_)[0].record(ncclStream);
   work->ncclComms_[0] = ncclComms[0]; 
 
   {
@@ -2500,9 +2510,8 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::_allgather_base(
   // in which only one ncclComm is required, rather than create multiple for each tensor
 
   // Bump collective counter
-  if (sequenceNum_) {
-    sequenceNum_->increment();
-  }
+  seq_++;
+
   auto opType = OpType::_ALLGATHER_BASE;
   const auto devices = getDeviceList(std::vector<at::Tensor>{inputTensors[0]});
   // all tensors on the same device, thus use same nccl_comm
@@ -2543,7 +2552,7 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::_allgather_base(
     }
   }
   // record event
-  (*work->cudaEvents_)[0].record(ncclStream);
+  (*work->ncclEndEvents_)[0].record(ncclStream);
   work->ncclComms_[0] = ncclComms[0];
 
   {
