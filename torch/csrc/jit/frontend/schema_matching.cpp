@@ -1,5 +1,6 @@
 #include <torch/csrc/jit/frontend/schema_matching.h>
 
+#include <ATen/core/interned_strings.h>
 #include <ATen/core/jit_type.h>
 #include <c10/util/Exception.h>
 #include <c10/util/Optional.h>
@@ -8,6 +9,7 @@
 #include <torch/csrc/jit/frontend/builtin_functions.h>
 #include <torch/csrc/jit/frontend/error_report.h>
 #include <torch/csrc/jit/frontend/function_schema_parser.h>
+#include <torch/csrc/jit/ir/ir.h>
 #include <torch/csrc/jit/operator_upgraders/utils.h>
 #include <torch/csrc/jit/operator_upgraders/version_map.h>
 #include <torch/csrc/jit/runtime/operator.h>
@@ -74,6 +76,16 @@ Value* tryConvertToType(
       return tryConvertToType(
           loc, graph, op->getElementType(), value, allow_conversions);
     }
+  }
+
+  // allow temporary, unannotated list literals `[]` to match to arbitrary list
+  // types
+  if (value->node()->kind() == prim::EmptyListLiteral &&
+      concrete_type->cast<ListType>()) {
+    value = graph
+                .insertNode(graph.createList(
+                    concrete_type->cast<ListType>()->getElementType(), {}))
+                ->output();
   }
 
   if (auto value_tuple = value->type()->cast<TupleType>()) {
@@ -440,8 +452,11 @@ static c10::optional<MatchedSchema> tryMatchSchema(
     positional_inputs.push_back(positional);
   }
   // check for unused self argument
-  if (self != c10::nullopt && failure_messages) {
-    err() << "Provided self argument not used in schema.\n";
+  if (self != c10::nullopt) {
+    if (failure_messages) {
+      err() << "Provided self argument not used in schema.\n";
+    }
+    return c10::nullopt;
   }
 
   if (schema.is_vararg()) {

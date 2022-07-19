@@ -362,6 +362,33 @@ def check_submodules():
                                  'benchmark'), ['CMakeLists.txt'])
 
 
+# Windows has very bad support for symbolic links.
+# Instead of using symlinks, we're going to copy files over
+def mirror_files_into_torchgen():
+    # (new_path, orig_path)
+    # Directories are OK and are recursively mirrored.
+    paths = [
+        ('torchgen/packaged/ATen/native/native_functions.yaml', 'aten/src/ATen/native/native_functions.yaml'),
+        ('torchgen/packaged/ATen/native/tags.yaml', 'aten/src/ATen/native/tags.yaml'),
+        ('torchgen/packaged/ATen/templates', 'aten/src/ATen/templates'),
+    ]
+    for new_path, orig_path in paths:
+        # Create the dirs involved in new_path if they don't exist
+        if not os.path.exists(new_path):
+            os.makedirs(os.path.dirname(new_path), exist_ok=True)
+
+        # Copy the files from the orig location to the new location
+        if os.path.isfile(orig_path):
+            shutil.copyfile(orig_path, new_path)
+            continue
+        if os.path.isdir(orig_path):
+            if os.path.exists(new_path):
+                # copytree fails if the tree exists already, so remove it.
+                shutil.rmtree(new_path)
+            shutil.copytree(orig_path, new_path)
+            continue
+        raise RuntimeError("Check the file paths in `mirror_files_into_torchgen()`")
+
 # all the work we need to do _before_ setup runs
 def build_deps():
     report('-- Building version ' + version)
@@ -824,7 +851,16 @@ def configure_extension_build():
                   include_dirs=[],
                   library_dirs=library_dirs,
                   extra_link_args=extra_link_args + main_link_args + make_relative_rpath_args('lib'))
+    C_flatbuffer = Extension("torch._C_flatbuffer",
+                             libraries=main_libraries,
+                             sources=["torch/csrc/stub_with_flatbuffer.c"],
+                             language='c',
+                             extra_compile_args=main_compile_args + extra_compile_args,
+                             include_dirs=[],
+                             library_dirs=library_dirs,
+                             extra_link_args=extra_link_args + main_link_args + make_relative_rpath_args('lib'))
     extensions.append(C)
+    extensions.append(C_flatbuffer)
 
     if not IS_WINDOWS:
         DL = Extension("torch._dl",
@@ -902,6 +938,7 @@ if __name__ == '__main__':
         print(e)
         sys.exit(1)
 
+    mirror_files_into_torchgen()
     if RUN_BUILD_DEPS:
         build_deps()
 
@@ -932,6 +969,7 @@ if __name__ == '__main__':
                 'bin/*',
                 'test/*',
                 '_C/*.pyi',
+                '_C_flatbuffer/*.pyi',
                 'cuda/*.pyi',
                 'optim/*.pyi',
                 'autograd/*.pyi',
@@ -939,6 +977,7 @@ if __name__ == '__main__':
                 'nn/*.pyi',
                 'nn/modules/*.pyi',
                 'nn/parallel/*.pyi',
+                'utils/data/*.pyi',
                 'lib/*.so*',
                 'lib/*.dylib*',
                 'lib/*.dll',
@@ -1018,7 +1057,8 @@ if __name__ == '__main__':
                 'include/torch/csrc/autograd/utils/*.h',
                 'include/torch/csrc/cuda/*.h',
                 'include/torch/csrc/deploy/*.h',
-                'include/torch/csrc/deploy/interpreter/interpreter_impl.h',
+                'include/torch/csrc/deploy/interpreter/*.h',
+                'include/torch/csrc/deploy/interpreter/*.hpp',
                 'include/torch/csrc/distributed/c10d/exception.h',
                 'include/torch/csrc/jit/*.h',
                 'include/torch/csrc/jit/backends/*.h',
@@ -1039,7 +1079,9 @@ if __name__ == '__main__':
                 'include/torch/csrc/profiler/*.h',
                 'include/torch/csrc/utils/*.h',
                 'include/torch/csrc/tensor/*.h',
+                'include/torch/csrc/lazy/backend/*.h',
                 'include/torch/csrc/lazy/core/*.h',
+                'include/torch/csrc/lazy/core/ops/*.h',
                 'include/pybind11/*.h',
                 'include/pybind11/detail/*.h',
                 'include/TH/*.h*',
@@ -1065,6 +1107,15 @@ if __name__ == '__main__':
                 'utils/model_dump/skeleton.html',
                 'utils/model_dump/code.js',
                 'utils/model_dump/*.mjs',
+            ],
+            'torchgen': [
+                # Recursive glob doesn't work in setup.py,
+                # https://github.com/pypa/setuptools/issues/1806
+                # To make this robust we should replace it with some code that
+                # returns a list of everything under packaged/
+                'packaged/ATen/*',
+                'packaged/ATen/native/*',
+                'packaged/ATen/templates/*',
             ],
             'caffe2': [
                 'python/serialized_test/data/operator_test/*.zip',

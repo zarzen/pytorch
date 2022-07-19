@@ -49,8 +49,9 @@ if [[ -n "${CIRCLE_PR_NUMBER:-}" ]]; then
   git reset --hard "$CIRCLE_SHA1"
 elif [[ -n "${CIRCLE_SHA1:-}" ]]; then
   # Scheduled workflows & "smoke" binary build on master on PR merges
+  DEFAULT_BRANCH="$(git remote show $CIRCLE_REPOSITORY_URL | awk '/HEAD branch/ {print $NF}')"
   git reset --hard "$CIRCLE_SHA1"
-  git checkout -q -B master
+  git checkout -q -B $DEFAULT_BRANCH
 else
   echo "Can't tell what to checkout"
   exit 1
@@ -61,7 +62,7 @@ git --no-pager log --max-count 1
 popd
 
 # Clone the Builder master repo
-retry git clone -q https://github.com/pytorch/builder.git "$BUILDER_ROOT"
+retry git clone -q https://github.com/pytorch/builder.git -b release/1.12 "$BUILDER_ROOT"
 pushd "$BUILDER_ROOT"
 echo "Using builder from "
 git --no-pager log --max-count 1

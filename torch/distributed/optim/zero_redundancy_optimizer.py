@@ -1117,6 +1117,10 @@ class ZeroRedundancyOptimizer(Optimizer, Joinable):
             else:
                 # Load the parameter state to the local optimizer
                 self.optim.state[param] = _recursive_copy_to_device(value, non_blocking=True, device=param.device)
+                # Force zero-dimensional tensors (like Adam "step") on CPU
+                for state_name, state_value in self.optim.state[param].items():
+                    if torch.is_tensor(state_value) and state_value.dim() == 0:
+                        self.optim.state[param][state_name] = state_value.cpu()
 
         super().load_state_dict(state_dict)
 
@@ -1325,8 +1329,8 @@ class ZeroRedundancyOptimizer(Optimizer, Joinable):
         try:
             all_params = list(params)
         except TypeError:
-            raise TypeError("`params` argument should be an iterable of "
-                            f"Tensors, but got {torch.typename(params)}")
+            raise TypeError("`params` argument should be an iterable of Tensors"
+                            f" or dicts, but got {torch.typename(params)}")
         if len(all_params) == 0:
             raise ValueError("ZeroRedundancyOptimizer got an empty parameter "
                              "list")

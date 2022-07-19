@@ -50,16 +50,22 @@ jobs:
             setuptools \
             typing_extensions
 
+      # [see note: pytorch repo ref]
       - name: Checkout PyTorch
-        uses: zhouzhuojie/checkout@05b13c9a0d21f08f6d5e64a1d5042246d13619d9
-        with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0
-          submodules: recursive
+        uses: pytorch/pytorch/.github/actions/checkout-pytorch@master
 
       - name: Build PyTorch Android
         run: |
+          # Install NDK 21 after GitHub update
+          # https://github.com/actions/virtual-environments/issues/5595
+          ANDROID_ROOT="/usr/local/lib/android"
+          ANDROID_SDK_ROOT="${ANDROID_ROOT}/sdk"
+          SDKMANAGER="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+          echo "y" | $SDKMANAGER "ndk;21.4.7075529"
+
           export ANDROID_NDK="${ANDROID_SDK_ROOT}/ndk-bundle"
+          ln -sfn $ANDROID_SDK_ROOT/ndk/21.4.7075529 $ANDROID_NDK
+
           echo "CMAKE_PREFIX_PATH=${CONDA_PREFIX:-"$(dirname "$(which conda)")/../"}" >> "${GITHUB_ENV}"
           ./scripts/build_pytorch_android.sh x86
 
