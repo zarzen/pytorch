@@ -6,7 +6,6 @@
 #include <ATen/cuda/CUDAContext.h>
 #include <ATen/cuda/CUDAEvent.h>
 #include <ATen/cuda/PeerToPeerAccess.h>
-#include <c10/cuda/CUDAStream.h>
 #include <ATen/native/Copy.h>
 #include <ATen/native/TensorIterator.h>
 #include <ATen/native/cuda/Loops.cuh>
@@ -16,6 +15,9 @@
 #else
 #include <ATen/ops/empty_like.h>
 #endif
+
+#include <c10/cuda/CUDACachingAllocator.h>
+#include <c10/cuda/CUDAStream.h>
 
 namespace at {
 namespace native {
@@ -48,7 +50,9 @@ void neg_conj_kernel_cuda(TensorIteratorBase &iter) {
 using namespace at::cuda;
 
 // device-to-device copy, does type conversion
-void copy_device_to_device(TensorIterator& iter, bool non_blocking) {
+void copy_device_to_device(TensorIterator& iter,
+                           bool non_blocking,
+                           bool p2p_enabled) {
   int64_t numel = iter.numel();
 
   // We can memcpy the memory if both tensors have the same type AND both
@@ -89,11 +93,25 @@ void copy_device_to_device(TensorIterator& iter, bool non_blocking) {
     void *src = iter.data_ptr(1);
     size_t size = numel * iter.element_size(0);
     if (src != dst || src_device != dst_device) {
-      // Perform the copy
-      AT_CUDA_CHECK(cudaMemcpyAsync(
-          dst, src, size,
-          cudaMemcpyDeviceToDevice,
-          copy_stream));
+      // Due to bizarre cuda driver intricacies, copies of
+      // cudaMallocAsynced memory between devices that aren't
+      // peer-to-peer-capable need "cudaMemcpyPeerAsync".
+      bool using_cudaMallocAsync = (CUDACachingAllocator::allocatorBackend() ==
+                                    CUDACachingAllocator::AllocatorBackend::CUDAMALLOCASYNC);
+      bool needs_MemcpyPeer = (src_device != dst_device &&
+                               using_cudaMallocAsync &&
+                               !p2p_enabled);
+      if (needs_MemcpyPeer) {
+        AT_CUDA_CHECK(cudaMemcpyPeerAsync(
+            dst, dst_device.index(),
+            src, src_device.index(),
+            size, copy_stream));
+      } else {
+        AT_CUDA_CHECK(cudaMemcpyAsync(
+            dst, src, size,
+            cudaMemcpyDeviceToDevice,
+            copy_stream));
+      }
     }
   } else {
     if (same_neg) {
@@ -206,7 +224,7 @@ static void copy_kernel_cuda(TensorIterator& iter, bool non_blocking) {
 
   // Copy on GPU (or between GPUs)
   if (dst_device.is_cuda() && src_device.is_cuda()) {
-    copy_device_to_device(iter, non_blocking);
+    copy_device_to_device(iter, non_blocking, p2p_enabled);
     return;
   }
 
