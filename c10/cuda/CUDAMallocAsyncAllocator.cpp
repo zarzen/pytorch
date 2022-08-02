@@ -549,7 +549,6 @@ void* getBaseAllocation(void* ptr, size_t* size) {
 }
 
 void recordStream(const DataPtr& ptr, cuda::CUDAStream stream) {
-  std::lock_guard<std::mutex> lk(general_mutex);
 
   // The pointer should exist in the map already.
   auto it = ptr_info.find(ptr.get());
