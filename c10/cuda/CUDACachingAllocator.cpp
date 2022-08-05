@@ -19,6 +19,11 @@
 #include <set>
 #include <vector>
 
+#include <iostream>
+#include <fstream>
+#include <stdlib.h>
+#include <chrono>
+#include <time.h>
 namespace c10 {
 
 C10_DEFINE_REGISTRY(FreeCudaMemoryCallbacksRegistry, FreeMemoryCallback);
@@ -548,6 +553,8 @@ namespace Native {
 
 class DeviceCachingAllocator {
  private:
+  // log stream
+  std::ofstream log_stream;
   // lock around all operations
   mutable std::recursive_mutex mutex;
 
@@ -604,6 +611,25 @@ class DeviceCachingAllocator {
       : large_blocks(BlockComparator, /*is_small=*/false),
         small_blocks(BlockComparator, /*is_small=*/true) {
     stats.max_split_size = CachingAllocatorConfig::max_split_size();
+    log_stream.open("/tmp/device-caching-allocator-" + std::to_string(rand() % 1000), 
+                    std::ios::out | std::ios::app);
+  }
+
+  void _log_malloc_free(Block* b, size_t original_size=0, void* orig_block_ptr=nullptr) {
+    size_t size = b->size;
+    void* mem_ptr = b->ptr;
+    if (original_size > 0) {
+      size = original_size;
+    }
+    if (orig_block_ptr != nullptr) {
+      mem_ptr = orig_block_ptr;
+    }
+    auto now = std::chrono::system_clock::now().time_since_epoch();
+    log_stream << std::chrono::duration_cast<std::chrono::nanoseconds>(now).count() << ", "
+               << b->device << ", " << b << ", " 
+               << b->pool << ", " << mem_ptr << ", " 
+               << b->allocated << ", " << size << "\n";
+    log_stream.flush();
   }
 
   // All public methods (except the above) acquire the allocator mutex.
@@ -782,6 +808,7 @@ class DeviceCachingAllocator {
         stats.reserved_bytes[static_cast<size_t>(StatType::AGGREGATE)].current,
         c10::Device(c10::DeviceType::CUDA, device));
 
+    _log_malloc_free(block);
     return block;
   }
 
@@ -826,6 +853,8 @@ class DeviceCachingAllocator {
         stats.allocated_bytes[static_cast<size_t>(StatType::AGGREGATE)].current,
         stats.reserved_bytes[static_cast<size_t>(StatType::AGGREGATE)].current,
         c10::Device(c10::DeviceType::CUDA, block->device));
+
+    _log_malloc_free(block, orig_block_size, orig_block_ptr);
   }
 
   void* getBaseAllocation(Block* block, size_t* outSize) {
