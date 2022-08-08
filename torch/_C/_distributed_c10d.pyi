@@ -328,6 +328,18 @@ class ProcessGroup:
         srcRank: int,
         tag: int,
     ) -> Work: ...
+    def _send_coalesced(
+        self,
+        tensors: List[Tensor],
+        dstRank: int,
+        tag: int,
+    ) -> Work: ...
+    def _recv_coalesced(
+        self,
+        tensors: List[Tensor],
+        srcRank: int,
+        tag: int,
+    ) -> Work: ...
     def recv_anysource(self, tensors: List[Tensor], tag: int) -> Work: ...
     def barrier(self, opts=BarrierOptions()) -> Work: ...
 

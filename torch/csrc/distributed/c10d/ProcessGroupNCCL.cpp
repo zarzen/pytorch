@@ -1312,6 +1312,33 @@ int64_t check_gpu_tensors_same_device(const std::vector<at::Tensor>& tensors) {
   return total_numel;
 }
 
+int64_t check_mixed_type_gpu_tensors_same_device(const std::vector<at::Tensor>& tensors) {
+  if (tensors.size() == 0) {
+    TORCH_CHECK(false, "Tensor list must be nonempty");
+  }
+
+  const auto& first = tensors.front();
+
+  int64_t total_numel = 0;
+  for (const auto& t : tensors) {
+    if (!t.is_cuda() || t.is_sparse()) {
+      TORCH_CHECK(false, "Tensors must be CUDA and dense");
+    }
+    if (!t.is_non_overlapping_and_dense()) {
+      TORCH_CHECK(false, "Tensors must be non-overlapping and dense");
+    }
+    // If we're in this function, the user called a _coalesced collective
+    // on a set of tensors with potentially different sizes and strides.
+    // Therefore, we don't check for matching sizes and strides,
+    // but we do double-check tensors are on the same device.
+    TORCH_CHECK(t.get_device() == tensors[0].get_device(),
+                "Expected list of tensors on the same device");
+    total_numel += t.numel();
+  }
+
+  return total_numel;
+}
+
 // Flatten each list in `tensor_lists' for a gather or scatter operation, and
 // ensure compatibility with the corresponding tensor in `other'.
 std::vector<at::Tensor> flatten_for_scatter_gather(
@@ -1531,6 +1558,7 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::pointToPoint(
     PostProcess post,
     const char* profilingTitle) {
   const auto devices = getDeviceList(tensors);
+  const bool inputs_same_dev = (devices.size() == 1);
   std::string key;
   int p2pRank = 0, p2pTargetRank = 0;
   bool isSendRecvSelf = false;
@@ -1552,8 +1580,11 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::pointToPoint(
   }
   auto& ncclComms = getNCCLComm(key, devices, opType, p2pRank, isSendRecvSelf);
 
+  // Used many times below, so we stash the unordered_map lookup
+  auto& ncclStreams = ncclStreams_[key];
+
   // First let NCCL streams wait for input tensors allocation streams
-  syncStreams(devices, ncclEvents_[key], ncclStreams_[key]);
+  syncStreams(devices, ncclEvents_[key], ncclStreams);
 
   // Work itself will create the CUDA events on all GPUs of tensors
   bool can_profile = tensors.size() == 1;
@@ -1575,42 +1606,37 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::pointToPoint(
 
   // Start event should only be recorded before the ncclGroupStart()
   if (desyncDebug_) {
-    for (const auto i : c10::irange(tensors.size())) {
-      at::cuda::CUDAStream& ncclStream = ncclStreams_[key][i];
+    for (const auto i : c10::irange(devices.size())) {
+      at::cuda::CUDAStream& ncclStream = ncclStreams[i];
       (*work->ncclStartEvents_)[i].record(ncclStream);
     }
   }
 
-  pre(ncclStreams_[key]);
-
-  for (const auto i : c10::irange(tensors.size())) {
-    gpuGuard.set_index(devices[i].index());
-    at::cuda::CUDAStream& ncclStream = ncclStreams_[key][i];
-
-    // Both send tensor and recv tensor are created on a worker stream and used
-    // in different ncclStreams.  Hence, both must record the ncclStream to
-    // prevent being freed before the collective finishes.
-    //
-    // See [Sync Streams].
-    c10::cuda::CUDACachingAllocator::recordStream(
-        tensors[i].storage().data_ptr(), ncclStream);
-  }
-
+  pre(ncclStreams);
+  
   {
     AutoNcclGroup nccl_group_guard;
     for (const auto i : c10::irange(tensors.size())) {
-      gpuGuard.set_index(devices[i].index());
-      at::cuda::CUDAStream& ncclStream = ncclStreams_[key][i];
+      if (!inputs_same_dev || (inputs_same_dev && i == 0)) {
+        gpuGuard.set_index(devices[i].index());
+      }
+      decltype(i) stream_comm_i = (inputs_same_dev ? 0 : i);
+      auto& ncclStream = ncclStreams[stream_comm_i];
+      auto& ncclComm = ncclComms[stream_comm_i];
+
+      c10::cuda::CUDACachingAllocator::recordStream(
+          tensors[i].storage().data_ptr(), ncclStream);
+
       C10D_NCCL_CHECK(fn(
-          tensors[i], ncclComms[i]->getNcclComm(), ncclStream, p2pTargetRank), ncclComms[i]->getNcclCommFailureReason());
+          tensors[i], ncclComm->getNcclComm(), ncclStream, p2pTargetRank), ncclComm->getNcclCommFailureReason());
     }
   }
 
-  post(ncclStreams_[key]);
+  post(ncclStreams);
 
   // End event should only be recorded after the ncclGroupEnd()
-  for (const auto i : c10::irange(tensors.size())) {
-    at::cuda::CUDAStream& ncclStream = ncclStreams_[key][i];
+  for (const auto i : c10::irange(devices.size())) {
+    at::cuda::CUDAStream& ncclStream = ncclStreams[i];
     (*work->ncclEndEvents_)[i].record(ncclStream);
     work->ncclComms_[i] = ncclComms[i];
     work->blockingWait_ = blockingWait_;
@@ -1622,7 +1648,7 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::pointToPoint(
   // recv(), but still create future for use cases such as profiling even for
   // send().
   {
-    c10::cuda::CUDAMultiStreamGuard streamGuard(ncclStreams_[key]);
+    c10::cuda::CUDAMultiStreamGuard streamGuard(ncclStreams);
     work->future_ = c10::make_intrusive<at::ivalue::Future>(
         c10::ListType::create(c10::TensorType::get()),
         devices);
@@ -2295,6 +2321,28 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::send(
   return ret;
 }
 
+
+c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::_send_coalesced(
+    std::vector<at::Tensor>& tensors,
+    int dstRank,
+    int /* unused */) {
+  check_mixed_type_gpu_tensors_same_device(tensors);
+  auto ret = pointToPoint(
+      tensors,
+      [&](at::Tensor& input,
+          ncclComm_t comm,
+          at::cuda::CUDAStream& stream,
+          int dst) {
+        torch::cuda::nccl::send(input, comm, stream, dst);
+        return ncclSuccess;
+      },
+      dstRank,
+      OpType::SEND,
+      "nccl:_send_coalesced");
+  return ret;
+}
+
+
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::recv(
     std::vector<at::Tensor>& tensors,
     int srcRank,
@@ -2312,6 +2360,26 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::recv(
       srcRank,
       OpType::RECV,
       "nccl:recv");
+  return ret;
+}
+
+c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::_recv_coalesced(
+    std::vector<at::Tensor>& tensors,
+    int srcRank,
+    int /* unused */) {
+  check_mixed_type_gpu_tensors_same_device(tensors);
+  auto ret = pointToPoint(
+      tensors,
+      [&](at::Tensor& output,
+          ncclComm_t comm,
+          at::cuda::CUDAStream& stream,
+          int src) {
+        torch::cuda::nccl::recv(output, comm, stream, src);
+        return ncclSuccess;
+      },
+      srcRank,
+      OpType::RECV,
+      "nccl:_recv_coalesced");
   return ret;
 }
 #else
@@ -2341,12 +2409,28 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::send(
       "ProcessGroupNCCL only supports send for NCCL lib version >= 2.7.0");
 }
 
+c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::_send_coalesced(
+    std::vector<at::Tensor>& /* unused */,
+    int /* unused */,
+    int /* unused */) {
+  TORCH_CHECK(false,
+      "ProcessGroupNCCL only supports _send_coalesced for NCCL lib version >= 2.7.0");
+}
+
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::recv(
     std::vector<at::Tensor>& /* unused */,
     int /* unused */,
     int /* unused */) {
   TORCH_CHECK(false,
       "ProcessGroupNCCL only supports recv for NCCL lib version >= 2.7.0");
+}
+
+c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::_recv_coalesced(
+    std::vector<at::Tensor>& /* unused */,
+    int /* unused */,
+    int /* unused */) {
+  TORCH_CHECK(false,
+      "ProcessGroupNCCL only supports _recv_coalesced for NCCL lib version >= 2.7.0");
 }
 #endif
 

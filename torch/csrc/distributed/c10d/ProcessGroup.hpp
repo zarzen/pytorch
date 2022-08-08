@@ -49,6 +49,8 @@ enum class OpType : std::uint8_t {
   BARRIER = 15,
   _REDUCE_SCATTER_BASE = 16,
   _REDUCE_SCATTER_COALESCED = 17,
+  _SEND_COALESCED = 18,
+  _RECV_COALESCED = 19,
   UNKNOWN = 100,
 };
 
@@ -411,7 +413,25 @@ class TORCH_API ProcessGroup : public torch::CustomClassHolder {
         c10::str("ProcessGroup ", getBackendName(), "does not support send"));
   }
 
+  virtual c10::intrusive_ptr<ProcessGroup::Work> _send_coalesced(
+      std::vector<at::Tensor>& /* tensors */,
+      int /* dstRank */,
+      int /* tag */) {
+    TORCH_CHECK(
+        false,
+        c10::str("ProcessGroup ", getBackendName(), "does not support send"));
+  }
+
   virtual c10::intrusive_ptr<ProcessGroup::Work> recv(
+      std::vector<at::Tensor>& /* tensors */,
+      int /* srcRank */,
+      int /* tag */) {
+    TORCH_CHECK(
+        false,
+        c10::str("ProcessGroup ", getBackendName(), "does not support recv"));
+  }
+
+  virtual c10::intrusive_ptr<ProcessGroup::Work> _recv_coalesced(
       std::vector<at::Tensor>& /* tensors */,
       int /* srcRank */,
       int /* tag */) {

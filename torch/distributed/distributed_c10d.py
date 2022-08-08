@@ -900,6 +900,39 @@ def isend(tensor, dst, group=None, tag=0):
         return group.send([tensor], group_dst_rank, tag)
 
 
+def _isend_coalesced(tensors, dst, group=None, tag=0):
+    """
+    Sends tensors asynchronously.
+
+    .. warning::
+        Modifying ``tensors`` before the request completes causes undefined
+        behavior.
+
+    Args:
+        tensors (List[Tensor]): a list of Tensor to send.
+        dst (int): Destination rank.
+        group (ProcessGroup, optional): The process group to work on. If None,
+            the default process group will be used.
+        tag (int, optional): Tag to match send with remote recv
+
+    Returns:
+        A distributed request object.
+        None, if not part of the group
+
+    """
+    _check_tensor_list(tensors, "tensors")
+    if _rank_not_in_group(group):
+        _warn_not_in_group("isend")
+        return
+
+    if group is None or group is GroupMember.WORLD:
+        default_pg = _get_default_group()
+        return default_pg._send_coalesced(tensors, dst, tag)
+    else:
+        group_dst_rank = _get_group_rank(group, dst)
+        return group._send_coalesced(tensors, group_dst_rank, tag)
+
+
 def irecv(tensor, src=None, group=None, tag=0):
     """
     Receives a tensor asynchronously.
@@ -935,6 +968,43 @@ def irecv(tensor, src=None, group=None, tag=0):
         else:
             group_src_rank = _get_group_rank(pg, src)
             return pg.recv([tensor], group_src_rank, tag)
+
+
+def _irecv_coalesced(tensors, src=None, group=None, tag=0):
+    """
+    Receives tensors asynchronously.
+
+    Args:
+        tensors (List[Tensor]): a list of Tensor to fill with received data.
+        src (int, optional): Source rank. Will receive from any
+            process if unspecified.
+        group (ProcessGroup, optional): The process group to work on. If None,
+            the default process group will be used.
+        tag (int, optional): Tag to match recv with remote send
+
+    Returns:
+        A distributed request object.
+        None, if not part of the group
+
+    """
+    _check_tensor_list(tensors, "tensors")
+    if _rank_not_in_group(group):
+        _warn_not_in_group("irecv")
+        return
+
+    if group is None or group is GroupMember.WORLD:
+        pg = _get_default_group()
+    else:
+        pg = group
+
+    if src is None:
+        return pg.recv_anysource(tensors, tag)
+    else:
+        if pg is GroupMember.WORLD:
+            return pg._recv_coalesced(tensors, src, tag)
+        else:
+            group_src_rank = _get_group_rank(pg, src)
+            return pg._recv_coalesced(tensors, group_src_rank, tag)
 
 
 def send(tensor, dst, group=None, tag=0):

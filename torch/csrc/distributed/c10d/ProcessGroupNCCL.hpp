@@ -342,7 +342,17 @@ class TORCH_API ProcessGroupNCCL : public ProcessGroup {
       int dstRank,
       int tag) override;
 
+  c10::intrusive_ptr<ProcessGroup::Work> _send_coalesced(
+      std::vector<at::Tensor>& tensors,
+      int dstRank,
+      int tag) override;
+
   c10::intrusive_ptr<ProcessGroup::Work> recv(
+      std::vector<at::Tensor>& tensors,
+      int srcRank,
+      int tag) override;
+
+  c10::intrusive_ptr<ProcessGroup::Work> _recv_coalesced(
       std::vector<at::Tensor>& tensors,
       int srcRank,
       int tag) override;

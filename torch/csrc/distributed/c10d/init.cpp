@@ -1248,6 +1248,16 @@ Arguments:
               py::call_guard<py::gil_scoped_release>())
 
           .def(
+              "_send_coalesced",
+              &::c10d::ProcessGroup::_send_coalesced,
+              py::call_guard<py::gil_scoped_release>())
+
+          .def(
+              "_recv_coalesced",
+              &::c10d::ProcessGroup::_recv_coalesced,
+              py::call_guard<py::gil_scoped_release>())
+
+          .def(
               "recv_anysource",
               &::c10d::ProcessGroup::recvAnysource,
               py::call_guard<py::gil_scoped_release>())
