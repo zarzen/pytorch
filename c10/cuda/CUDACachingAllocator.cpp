@@ -436,8 +436,11 @@ class DeviceCachingAllocator {
   // device statistics
   DeviceStats stats;
 
-  // unallocated cached blocks larger than 1 MB
+  // unallocated cached blocks larger than 512 MB
   BlockPool large_blocks;
+
+  // unallocated cached blocks larger than 1 MB
+  BlockPool medium_blocks;
 
   // unallocated cached blocks 1 MB or smaller
   BlockPool small_blocks;
@@ -484,7 +487,8 @@ class DeviceCachingAllocator {
  public:
   DeviceCachingAllocator()
       : large_blocks(BlockComparator, /*is_small=*/false),
-        small_blocks(BlockComparator, /*is_small=*/true) {
+        small_blocks(BlockComparator, /*is_small=*/true),
+        medium_blocks(BlockComparator, /*is_small=*/false) {
     stats.max_split_size = CachingAllocatorConfig::max_split_size();
   }
 
@@ -763,6 +767,7 @@ class DeviceCachingAllocator {
           &tmp_bytes));
     }
     cache_info_aux(large_blocks, total, largest);
+    cache_info_aux(medium_blocks, total, largest);
     cache_info_aux(small_blocks, total, largest);
     for (const auto& gp : graph_pools) {
       cache_info_aux(gp.second->large_blocks, total, largest);
@@ -975,6 +980,8 @@ class DeviceCachingAllocator {
         blocks.end(), small_blocks.blocks.begin(), small_blocks.blocks.end());
     blocks.insert(
         blocks.end(), large_blocks.blocks.begin(), large_blocks.blocks.end());
+    blocks.insert(
+        blocks.end(), medium_blocks.blocks.begin(), medium_blocks.blocks.end());
     for (const auto& gp : graph_pools) {
       blocks.insert(
           blocks.end(),
@@ -1069,6 +1076,7 @@ class DeviceCachingAllocator {
   }
 
   BlockPool& get_pool(size_t size, cudaStream_t stream) {
+    // NOTE: We are not going to change logic for cuda graph
 #if defined(CUDA_VERSION) && CUDA_VERSION >= 11000
     // captures_underway is a conservative guess that the current stream may be
     // capturing. It's only > 0 if some thread has begun and not yet ended a
@@ -1097,7 +1105,12 @@ class DeviceCachingAllocator {
 #endif
     if (size <= kSmallSize) {
       return small_blocks;
-    } else {
+    } 
+    else if (size <= 512 * kSmallSize) {
+      /* 512 MB */
+      return medium_blocks;
+    }
+    else {
       return large_blocks;
     }
   }
@@ -1188,6 +1201,13 @@ class DeviceCachingAllocator {
         ++freeable_block_count;
       }
     }
+    // count for medium sized blocks
+    for (auto& b : medium_blocks.blocks) {
+      if (!b->is_split()) {
+        total_age += b->gc_count;
+        ++freeable_block_count;
+      }
+    }
     // No free-able blocks?
     if (freeable_block_count == 0) {
       return;
@@ -1213,6 +1233,20 @@ class DeviceCachingAllocator {
           gc_reclaimed += block->size;
           total_age -= block->gc_count; // Decrement the age
           freeable_block_count--; // One less block that can be freed
+          release_block(block);
+        }
+      }
+
+      auto medium_it = medium_blocks.blocks.begin();
+      while (medium_it != medium_blocks.blocks.end()) {
+        Block* block = *it;
+        ++it;
+        if (!block->is_split() && block->gc_count >= age_threshold) {
+          block_freed = true;
+
+          gc_reclaimed += block->size;
+          total_age -= block->gc_count;
+          freeable_block_count--;
           release_block(block);
         }
       }
@@ -1325,8 +1359,10 @@ class DeviceCachingAllocator {
 
     // Free all non-split cached blocks to system allocator
     release_blocks(large_blocks);
+    release_blocks(medium_blocks);
     release_blocks(small_blocks);
 
+    // NOTE: we didn't introduce medium_blocks for cuda graph pools
     for (auto it = graph_pools_freeable.begin();
          it != graph_pools_freeable.end();) {
       // See notifyCaptureDestroy for the strategy here.
