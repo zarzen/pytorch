@@ -347,6 +347,10 @@ class CachingAllocatorConfig {
     return instance().m_roundup_power2_divisions;
   }
 
+  static std::vector<size_t> mem_pool_config() {
+    return instance().mem_pools;
+  }
+
  private:
   static CachingAllocatorConfig& instance() {
     static CachingAllocatorConfig* s_instance = ([]() {
@@ -364,6 +368,9 @@ class CachingAllocatorConfig {
   size_t m_max_split_size;
   size_t m_roundup_power2_divisions;
   double m_garbage_collection_threshold;
+
+  // pool sized with MB
+  std::vector<size_t> mem_pools;
 
   void parseArgs() {
     const char* val = getenv("PYTORCH_CUDA_ALLOC_CONF");
@@ -425,6 +432,24 @@ class CachingAllocatorConfig {
         }
       }
     }
+
+    // parse arguments for memory pools
+    // e.g., PYTORCH_CUDA_ALLOC_POOLS=1,512 => create three pools
+    char* mem_pool_config = getenv("PYTORCH_CUDA_ALLOC_POOLS");
+    if (mem_pool_config != NULL) {
+      char* pool_size = strtok(mem_pool_config, ",");
+      while (pool_size != NULL) {
+        mem_pools.push_back(std::stoull(pool_size));
+        pool_size = strtok(NULL, ",");
+      }
+    } else {
+      // default pool configuration, 1MB and >1MB
+      mem_pools.push_back(1);
+    }
+    // // For debug
+    // for (auto v : mem_pools) {
+    //   printf("pool size: %zu\n", v);
+    // }
   }
 };
 
@@ -436,14 +461,10 @@ class DeviceCachingAllocator {
   // device statistics
   DeviceStats stats;
 
-  // unallocated cached blocks larger than 512 MB
-  BlockPool large_blocks;
-
-  // unallocated cached blocks larger than 1 MB
-  BlockPool medium_blocks;
-
-  // unallocated cached blocks 1 MB or smaller
-  BlockPool small_blocks;
+  // vector that maintains a list of block pools
+  // NOTE: configuration specified via env var PYTORCH_CUDA_ALLOC_POOLS
+  // e.g., PYTORCH_CUDA_ALLOC_POOLS=1,512
+  std::vector<BlockPool> mem_blocks;
 
   // allocated or in use by a stream. Holds all active allocations,
   // whether they came from graph_pools or one of the BlockPools above.
@@ -485,11 +506,19 @@ class DeviceCachingAllocator {
   ska::flat_hash_map<CaptureId_t, MempoolId_t> capture_to_pool_map;
 
  public:
-  DeviceCachingAllocator()
-      : large_blocks(BlockComparator, /*is_small=*/false),
-        small_blocks(BlockComparator, /*is_small=*/true),
-        medium_blocks(BlockComparator, /*is_small=*/false) {
+  DeviceCachingAllocator() {
     stats.max_split_size = CachingAllocatorConfig::max_split_size();
+    auto mem_pool_config = CachingAllocatorConfig::mem_pool_config();
+    for (auto s: mem_pool_config) {
+      if (s <= kSmallSize) {
+        mem_blocks.emplace_back(BlockComparator, /*is_small*/true);
+      }
+      else {
+        mem_blocks.emplace_back(BlockComparator, /*is_small*/false);
+      };
+    }
+    // another blocks to hold all blocks that larger than the largest size
+    mem_blocks.emplace_back(BlockComparator, false);
   }
 
   // All public methods (except the above) acquire the allocator mutex.
@@ -766,9 +795,9 @@ class DeviceCachingAllocator {
           largest, // Use free memory as an optimistic initial guess of *largest
           &tmp_bytes));
     }
-    cache_info_aux(large_blocks, total, largest);
-    cache_info_aux(medium_blocks, total, largest);
-    cache_info_aux(small_blocks, total, largest);
+    for (auto& blocks: mem_blocks) {
+      cache_info_aux(blocks, total, largest);
+    }
     for (const auto& gp : graph_pools) {
       cache_info_aux(gp.second->large_blocks, total, largest);
       cache_info_aux(gp.second->small_blocks, total, largest);
@@ -976,12 +1005,10 @@ class DeviceCachingAllocator {
 
   std::vector<const Block*> get_all_blocks() const {
     std::vector<const Block*> blocks;
-    blocks.insert(
-        blocks.end(), small_blocks.blocks.begin(), small_blocks.blocks.end());
-    blocks.insert(
-        blocks.end(), large_blocks.blocks.begin(), large_blocks.blocks.end());
-    blocks.insert(
-        blocks.end(), medium_blocks.blocks.begin(), medium_blocks.blocks.end());
+    for (auto& sized_blocks: mem_blocks) {
+      blocks.insert(
+          blocks.end(), sized_blocks.blocks.begin(), sized_blocks.blocks.end());
+    }
     for (const auto& gp : graph_pools) {
       blocks.insert(
           blocks.end(),
@@ -1103,16 +1130,17 @@ class DeviceCachingAllocator {
       }
     }
 #endif
-    if (size <= kSmallSize) {
-      return small_blocks;
-    } 
-    else if (size <= 512 * kSmallSize) {
-      /* 512 MB */
-      return medium_blocks;
+    int i = 0;
+    // pool_size in unit MB
+    for (auto& pool_size : CachingAllocatorConfig::mem_pool_config()){
+      if (size < pool_size * kSmallSize) {
+        return mem_blocks[i];
+      } else {
+        i += 1;
+      }
     }
-    else {
-      return large_blocks;
-    }
+    // return the largest mem_blocks
+    return mem_blocks[i];
   }
 
   StatType get_stat_type_for_pool(const BlockPool& pool) {
@@ -1195,17 +1223,13 @@ class DeviceCachingAllocator {
     // get "avg age" threshold.
     double total_age = 0.0;
     int freeable_block_count = 0;
-    for (auto& b : large_blocks.blocks) {
-      if (!b->is_split()) {
-        total_age += b->gc_count;
-        ++freeable_block_count;
-      }
-    }
-    // count for medium sized blocks
-    for (auto& b : medium_blocks.blocks) {
-      if (!b->is_split()) {
-        total_age += b->gc_count;
-        ++freeable_block_count;
+    // gc blocks larger than the smallest block pool
+    for (auto i = 0; i < mem_blocks.size(); i++) {
+      for (auto& b : mem_blocks[i].blocks) {
+        if (!b->is_split()) {
+          total_age += b->gc_count;
+          ++freeable_block_count;
+        }
       }
     }
     // No free-able blocks?
@@ -1224,32 +1248,21 @@ class DeviceCachingAllocator {
 
       // Free blocks of > avg age. Don't stop upon reaching the target_size,
       // we don't want this GC to be triggered frequently.
-      auto it = large_blocks.blocks.begin();
-      while (it != large_blocks.blocks.end()) {
-        Block* block = *it;
-        ++it;
-        if (!block->is_split() && block->gc_count >= age_threshold) {
-          block_freed = true;
-          gc_reclaimed += block->size;
-          total_age -= block->gc_count; // Decrement the age
-          freeable_block_count--; // One less block that can be freed
-          release_block(block);
+      for (auto sized_blocks: mem_blocks) {
+        auto it = sized_blocks.blocks.begin();
+        while (it != sized_blocks.blocks.end()) {
+          Block* block = *it;
+          ++it;
+          if (!block->is_split() && block->gc_count >= age_threshold) {
+            block_freed = true;
+            gc_reclaimed += block->size;
+            total_age -= block->gc_count; // Decrement the age
+            freeable_block_count--; // One less block that can be freed
+            release_block(block);
+          }
         }
       }
 
-      auto medium_it = medium_blocks.blocks.begin();
-      while (medium_it != medium_blocks.blocks.end()) {
-        Block* block = *it;
-        ++it;
-        if (!block->is_split() && block->gc_count >= age_threshold) {
-          block_freed = true;
-
-          gc_reclaimed += block->size;
-          total_age -= block->gc_count;
-          freeable_block_count--;
-          release_block(block);
-        }
-      }
     }
   }
 
@@ -1358,11 +1371,11 @@ class DeviceCachingAllocator {
     synchronize_and_free_events();
 
     // Free all non-split cached blocks to system allocator
-    release_blocks(large_blocks);
-    release_blocks(medium_blocks);
-    release_blocks(small_blocks);
+    for (auto sized_blocks: mem_blocks) {
+      release_blocks(sized_blocks);
+    }
 
-    // NOTE: we didn't introduce medium_blocks for cuda graph pools
+    // NOTE: we didn't modify block pools for cuda graph pools
     for (auto it = graph_pools_freeable.begin();
          it != graph_pools_freeable.end();) {
       // See notifyCaptureDestroy for the strategy here.
