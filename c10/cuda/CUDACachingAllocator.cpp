@@ -1133,7 +1133,7 @@ class DeviceCachingAllocator {
     int i = 0;
     // pool_size in unit MB
     for (auto& pool_size : CachingAllocatorConfig::mem_pool_config()){
-      if (size < pool_size * kSmallSize) {
+      if (size <= pool_size * kSmallSize) {
         return mem_blocks[i];
       } else {
         i += 1;
